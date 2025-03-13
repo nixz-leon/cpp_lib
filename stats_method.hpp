@@ -209,54 +209,6 @@ namespace sm {
         Y = y;
         
     };
-
-    /*
-    template <typename T>
-    void read_csv(std::string filename, vecs<T> &vectors, bool header = false) {
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            throw std::runtime_error("Could not open file");
-        }
-        std::string line;
-        if (header) {
-            std::getline(file, line); // Skip header line
-        }
-        std::vector<std::vector<T>> rows;
-        while (std::getline(file, line)) {
-            std::stringstream ss(line);
-            std::vector<T> row;
-            T value;
-            while (ss >> value) {
-                row.push_back(value);
-                if (ss.peek() == ',') ss.ignore();
-            }
-            
-            if (!row.empty()) {
-                //response.push_back(row.back()); // Last element to y
-                //row.pop_back(); // Remove last element
-                //predictors.push_back(row); // Remaining elements to xs
-                rows.push_back(row);
-            }
-        }
-        vec<T> temp(rows.size());
-        vecs<T> temp_vecs(rows[0].size(), rows.size());
-        for(int j =0; j < rows.size(); j++){
-            for(int i =0; i < temp.size; i++){
-                temp(i) = rows[i][j];
-            }
-            temp_vecs(j) = temp;
-        }
-        
-        for(int j =0; j < predictors[0].size(); j++){
-            temp1[j].printout();
-        }
-        
-        //xs = temp1;
-        //y = temp2;
-        vectors = temp_vecs;
-    }
-    */
-
     template <typename T>
     void read_csv(std::string filename, vecs<T> &vectors, bool header = false) {
         std::ifstream file(filename);

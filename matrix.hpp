@@ -36,7 +36,8 @@
 #include <windows.h>
 #endif
 
-template <typename T> class matrix{
+template <typename T>
+class matrix {  
     public: //this are memory functions
         matrix();//default 
         matrix(int n, int m); //normal
@@ -56,32 +57,51 @@ template <typename T> class matrix{
         static GLFWwindow* window;
         static GLuint computeProgram;
         static bool glInitialized;
-        
-        static void initGL() {
-            if (!glfwInit()) {
-                throw std::runtime_error("Failed to initialize GLFW");
+        static bool capabilities_detected;  // Add this line
+        static int GPU_SIZE_THRESHOLD;
+        static int THREAD_SIZE_THRESHOLD;
+        static int CACHE_BLOCK_SIZE;
+
+        static bool initGL() {
+            try {
+                if (!glfwInit()) {
+                    return false;
+                }
+                
+                glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+                glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+                
+                window = glfwCreateWindow(1, 1, "Compute", nullptr, nullptr);
+                if (!window) {
+                    glfwTerminate();
+                    return false;
+                }
+                
+                glfwMakeContextCurrent(window);
+                
+                if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+                    glfwDestroyWindow(window);
+                    glfwTerminate();
+                    return false;
+                }
+                
+                // Load compute shader
+                try {
+                    computeProgram = loadComputeShader("include/matmul.comp");
+                    glInitialized = true;
+                    return true;
+                } catch (const std::runtime_error& e) {
+                    std::cerr << "Shader loading failed: " << e.what() << std::endl;
+                    glfwDestroyWindow(window);
+                    glfwTerminate();
+                    return false;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "GL initialization failed: " << e.what() << std::endl;
+                return false;
             }
-            
-            glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-            
-            window = glfwCreateWindow(1, 1, "Compute", nullptr, nullptr);
-            if (!window) {
-                glfwTerminate();
-                throw std::runtime_error("Failed to create GLFW window");
-            }
-            
-            glfwMakeContextCurrent(window);
-            
-            if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-                throw std::runtime_error("Failed to initialize GLAD");
-            }
-            
-            // Load compute shader
-            computeProgram = loadComputeShader("include/matmul.comp");
-            glInitialized = true;
         };
         static GLuint loadComputeShader(const char* filepath) {
             std::ifstream file(filepath);
@@ -120,10 +140,6 @@ template <typename T> class matrix{
             return program;
         };
         
-        static int GPU_SIZE_THRESHOLD;
-        static int THREAD_SIZE_THRESHOLD;
-        static int CACHE_BLOCK_SIZE;
-
         static void detectHardwareCapabilities() {
             // GPU capabilities
             if (glInitialized || initGL()) {
@@ -176,18 +192,23 @@ template <typename T> class matrix{
             THREAD_SIZE_THRESHOLD = std::max(128, std::min(512, THREAD_SIZE_THRESHOLD));
         };
 
-        static matrix<T> multiplySequential(const matrix<T>& a, const matrix<T>& b) {
+        static inline matrix<T> multiplySequential(const matrix<T>& a, const matrix<T>& b) {
             matrix<T> result(a.row, b.col);
-            for (int i = 0; i < a.row; i += CACHE_BLOCK_SIZE) {
-                for (int j = 0; j < b.col; j += CACHE_BLOCK_SIZE) {
-                    for (int k = 0; k < a.col; k += CACHE_BLOCK_SIZE) {
-                        for (int ii = i; ii < std::min(i + CACHE_BLOCK_SIZE, a.row); ++ii) {
-                            for (int jj = j; jj < std::min(j + CACHE_BLOCK_SIZE, b.col); ++jj) {
-                                T sum = result(ii, jj);
-                                for (int kk = k; kk < std::min(k + CACHE_BLOCK_SIZE, a.col); ++kk) {
-                                    sum += a(ii, kk) * b(kk, jj);
+            const int block = CACHE_BLOCK_SIZE;
+            
+            // Triple nested loop with cache blocking
+            #pragma omp simd
+            for (int i = 0; i < a.row; i += block) {
+                for (int k = 0; k < a.col; k += block) {
+                    for (int j = 0; j < b.col; j += block) {
+                        // Block multiplication
+                        for (int ii = i; ii < std::min(i + block, a.row); ++ii) {
+                            for (int kk = k; kk < std::min(k + block, a.col); ++kk) {
+                                T r = a(ii, kk);
+                                #pragma omp simd
+                                for (int jj = j; jj < std::min(j + block, b.col); ++jj) {
+                                    result(ii, jj) += r * b(kk, jj);
                                 }
-                                result(ii, jj) = sum;
                             }
                         }
                     }
@@ -196,76 +217,167 @@ template <typename T> class matrix{
             return result;
         };
 
-        static matrix<T> multiplyThreaded(const matrix<T>& a, const matrix<T>& b) {
-            matrix<T> temp(a.row, b.col);
+        static inline matrix<T> multiplyThreaded(const matrix<T>& a, const matrix<T>& b) {
+            matrix<T> result(a.row, b.col);
+            const int block = CACHE_BLOCK_SIZE;
             
-            auto multiply_block = [&a, &b, &temp](int start_row, int end_row) {
-                for (int i = start_row; i < end_row; ++i) {
-                    for (int j = 0; j < b.col; ++j) {
-                        temp(i, j) = 0;
-                        for (int k = 0; k < b.row; ++k) {
-                            temp(i, j) += a(i, k) * b(k, j);
+            // Calculate optimal number of threads based on CPU cores and matrix size
+            int num_threads = std::min(
+                static_cast<int>(std::thread::hardware_concurrency()),
+                (a.row + block - 1) / block
+            );
+            
+            // Pre-allocate thread vector to avoid reallocations
+            std::vector<std::thread> threads;
+            threads.reserve(num_threads);
+            
+            // Aligned memory access optimization
+            alignas(32) T* temp_result = new T[a.row * b.col]();
+            
+            auto multiply_block = [&](int start_i, int end_i) {
+                // Thread-local accumulator for better cache usage
+                alignas(32) T local_buffer[block * block];
+                
+                for (int i = start_i; i < end_i; i += block) {
+                    for (int k = 0; k < a.col; k += block) {
+                        // Zero local buffer
+                        std::memset(local_buffer, 0, sizeof(T) * block * block);
+                        
+                        for (int j = 0; j < b.col; j += block) {
+                            // Compute block boundaries
+                            const int i_end = std::min(i + block, end_i);
+                            const int k_end = std::min(k + block, a.col);
+                            const int j_end = std::min(j + block, b.col);
+                            
+                            // Manual vectorization hints
+                            #pragma omp simd collapse(2)
+                            for (int ii = i; ii < i_end; ++ii) {
+                                for (int kk = k; kk < k_end; ++kk) {
+                                    const T r = a(ii, kk);
+                                    const int row_offset = (ii - i) * block;
+                                    
+                                    #pragma omp simd
+                                    for (int jj = j; jj < j_end; ++jj) {
+                                        local_buffer[row_offset + (jj - j)] += r * b(kk, jj);
+                                    }
+                                }
+                            }
+                            
+                            // Accumulate block results
+                            for (int ii = i; ii < i_end; ++ii) {
+                                const int row_offset = (ii - i) * block;
+                                #pragma omp simd
+                                for (int jj = j; jj < j_end; ++jj) {
+                                    result(ii, jj) += local_buffer[row_offset + (jj - j)];
+                                }
+                            }
                         }
                     }
                 }
             };
-
-            int num_threads = std::thread::hardware_concurrency();
-            if (num_threads == 0) num_threads = 2;
-
-            int rows_per_thread = a.row / num_threads;
-            int remaining_rows = a.row % num_threads;
-
-            std::vector<std::thread> threads;
-            int start_row = 0;
-
+            
+            // Distribute work among threads
+            const int rows_per_thread = (a.row + num_threads - 1) / num_threads;
+            
             for (int t = 0; t < num_threads; ++t) {
-                int end_row = start_row + rows_per_thread + (t < remaining_rows ? 1 : 0);
-                threads.push_back(std::thread(multiply_block, start_row, end_row));
-                start_row = end_row;
+                const int start_row = t * rows_per_thread;
+                const int end_row = std::min(start_row + rows_per_thread, a.row);
+                if (start_row < end_row) {
+                    threads.emplace_back(multiply_block, start_row, end_row);
+                }
             }
-
-            for (auto& t : threads) {
-                t.join();
+            
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
             }
-
-            return temp;
+            
+            // Cleanup
+            delete[] temp_result;
+            
+            return result;
         };
 
-        static matrix<T> multiplyGPU(const matrix<T>& a, const matrix<T>& b) {
-            if (!glInitialized) {
-                initGL();
+        static inline matrix<T> multiplyGPU(const matrix<T>& a, const matrix<T>& b) {
+            if (!glInitialized && !initGL()) {
+                throw std::runtime_error("Failed to initialize OpenGL");
             }
-
+        
+            // Check if double precision is supported
+            if constexpr (std::is_same_v<T, double>) {
+                GLint doublePrecisionSupported;
+                // Check for GL_ARB_gpu_shader_fp64 extension
+                GLint numExtensions;
+                glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+                bool hasDoublePrecision = false;
+                
+                for (GLint i = 0; i < numExtensions; ++i) {
+                    const GLubyte* extension = glGetStringi(GL_EXTENSIONS, i);
+                    if (std::strcmp(reinterpret_cast<const char*>(extension), "GL_ARB_gpu_shader_fp64") == 0) {
+                        hasDoublePrecision = true;
+                        break;
+                    }
+                }
+                
+                if (!hasDoublePrecision) {
+                    throw std::runtime_error("Double precision not supported by GPU");
+                }
+            }
+        
+            // Load appropriate shader version
+            if (computeProgram == 0) {
+                if constexpr (std::is_same_v<T, float>) {
+                    computeProgram = loadComputeShader("include/matmul_float.comp");
+                } else {
+                    computeProgram = loadComputeShader("include/matmul_double.comp");
+                }
+            }
+        
             matrix<T> result(a.row, b.col);
             
+            // Create buffers
             GLuint buffers[3];
             glGenBuffers(3, buffers);
             
+            // Matrix A buffer
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
             glBufferData(GL_SHADER_STORAGE_BUFFER, a.row * a.col * sizeof(T), a.data, GL_STATIC_DRAW);
             
+            // Matrix B buffer
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[1]);
             glBufferData(GL_SHADER_STORAGE_BUFFER, b.row * b.col * sizeof(T), b.data, GL_STATIC_DRAW);
             
+            // Result buffer
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[2]);
             glBufferData(GL_SHADER_STORAGE_BUFFER, result.row * result.col * sizeof(T), nullptr, GL_DYNAMIC_COPY);
             
+            // Bind compute shader and set uniforms
             glUseProgram(computeProgram);
             glUniform1i(glGetUniformLocation(computeProgram, "width"), b.col);
             glUniform1i(glGetUniformLocation(computeProgram, "height"), a.row);
             glUniform1i(glGetUniformLocation(computeProgram, "depth"), a.col);
             
+            // Bind storage buffers
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffers[0]);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, buffers[1]);
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, buffers[2]);
             
-            glDispatchCompute((a.row + 15) / 16, (b.col + 15) / 16, 1);
+            // Calculate optimal dispatch size
+            const int WORK_GROUP_SIZE = 32;
+            int num_groups_x = (b.col + WORK_GROUP_SIZE - 1) / WORK_GROUP_SIZE;
+            int num_groups_y = (a.row + WORK_GROUP_SIZE - 1) / WORK_GROUP_SIZE;
+            
+            // Dispatch compute shader
+            glDispatchCompute(num_groups_x, num_groups_y, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
             
+            // Read back results
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[2]);
-            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, result.row * result.col * sizeof(T), result.data);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 
+                              result.row * result.col * sizeof(T), 
+                              result.data);
             
+            // Cleanup
             glDeleteBuffers(3, buffers);
             
             return result;
@@ -316,19 +428,28 @@ template <typename T> class matrix{
             }
         
             const size_t total_elements = a.row * b.col;
+            const size_t total_operations = total_elements * a.col;
         
-            if (total_elements >= GPU_SIZE_THRESHOLD * GPU_SIZE_THRESHOLD) {
+            // Debug output
+            //std::cout << "Using ";
+            
+            // Use GPU for matrices 512x512 or larger
+            if (total_operations >= GPU_SIZE_THRESHOLD * GPU_SIZE_THRESHOLD) {  // Removed cubic threshold
                 try {
+                    //std::cout << "GPU multiplication\n";
                     return multiplyGPU(a, b);
                 } catch (const std::runtime_error& e) {
                     std::cerr << "GPU multiplication failed, falling back to CPU: " << e.what() << std::endl;
                 }
             }
         
-            if (total_elements >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
+            // Use threaded multiplication for medium-sized matrices
+            if (total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
+                //std::cout << "threaded CPU multiplication\n";
                 return multiplyThreaded(a, b);
             }
         
+            //std::cout << "sequential CPU multiplication\n";
             return multiplySequential(a, b);
         };
         inline friend matrix<T> operator*(matrix<T> a, T b){matrix<T>temp(a); temp*=b;return temp;};
@@ -347,13 +468,13 @@ template <typename T> class matrix{
 template <typename T> GLFWwindow* matrix<T>::window = nullptr;
 template <typename T> GLuint matrix<T>::computeProgram = 0;
 template <typename T> bool matrix<T>::glInitialized = false;
+template <typename T> bool matrix<T>::capabilities_detected = false;
 template <typename T> int matrix<T>::GPU_SIZE_THRESHOLD = 512;
 template <typename T> int matrix<T>::THREAD_SIZE_THRESHOLD = 128;
 template <typename T> int matrix<T>::CACHE_BLOCK_SIZE = 32;
 
 template <typename T>
 matrix<T>::matrix(){
-    static bool capabilities_detected = false;
     if (!capabilities_detected) {
         detectHardwareCapabilities();
         capabilities_detected = true;
@@ -365,6 +486,10 @@ matrix<T>::matrix(){
 
 template <typename T>
 matrix<T>::matrix(int n, int m){
+    if (!capabilities_detected) {
+        detectHardwareCapabilities();
+        capabilities_detected = true;
+    }
     data = new T[n*m];
     std::memset(data, 0 , sizeof(T)*n*m);
     //data = (T*)std::calloc(n*m,sizeof(T));
@@ -374,6 +499,10 @@ matrix<T>::matrix(int n, int m){
 
 template <typename T>
 inline matrix<T>::matrix(vecs<T> &vectors, bool row_major){
+    if (!capabilities_detected) {
+        detectHardwareCapabilities();
+        capabilities_detected = true;
+    }
     if(row_major){
         row = vectors.size();
         col = vectors.num_of_vecs();
