@@ -43,6 +43,7 @@ template <typename T> class vec{
         inline void printout();
         inline const T back();
         int size;
+        T max() const;
     private:
         T *data;
         
@@ -78,7 +79,7 @@ template <typename T> class vec{
 
 template <class T>
 vec<T>::vec(){
-    std::cout << "null_constructor\n";
+    //std::cout << "null_constructor\n";
     data = nullptr;
     size = 0;
 };
@@ -298,7 +299,19 @@ inline vec<T> vec<T>::operator++()
     }
 };
 
-
+template <typename T>
+T vec<T>::max() const {
+    if (size == 0) {
+        throw std::runtime_error("Cannot find max of an empty vector");
+    }
+    T max_value = data[0];
+    for (int i = 1; i < size; i++) {
+        if (data[i] > max_value) {
+            max_value = data[i];
+        }
+    }
+    return max_value;
+}
 
 template <class T>
 class vecs {
@@ -321,8 +334,9 @@ public:
     int num_of_vecs(){return num_vecs;};
     int size(){return size_of_vecs;};
 
+    inline vec<T> back(){return vectors[num_vecs-1];};
     void printout();
-
+    vecs<T> subset(int start_col, int end_col); // Subset function
 };
 
 // Default constructor
@@ -344,7 +358,7 @@ vecs<T>::vecs(int num_vec, int size) : num_vecs(num_vec), size_of_vecs(size) {
 // Copy constructor
 template <class T>
 vecs<T>::vecs(const vecs<T>& other) : num_vecs(other.num_vecs), size_of_vecs(other.size_of_vecs) {
-    std::cout << "copy\n";
+    //std::cout << "copy\n";
     vec<T> temp(size_of_vecs);
     vectors = (vec<T>*)std::calloc(num_vecs,sizeof(temp));
     for (int i = 0; i < num_vecs; ++i) {
@@ -377,7 +391,7 @@ vecs<T>& vecs<T>::operator=(const vecs<T>& other) {
 // Move constructor
 template <class T>
 vecs<T>::vecs(vecs<T>&& other) noexcept : vectors(other.vectors), num_vecs(other.num_vecs), size_of_vecs(other.size_of_vecs) {
-    std::cout << "move\n";
+    //std::cout << "move\n";
     other.vectors = nullptr;
     other.num_vecs = 0;
     other.size_of_vecs = 0;
@@ -386,7 +400,7 @@ vecs<T>::vecs(vecs<T>&& other) noexcept : vectors(other.vectors), num_vecs(other
 // Move assignment operator
 template <class T>
 vecs<T>& vecs<T>::operator=(vecs<T>&& other) noexcept {
-    std::cout << "move assignment\n";
+    //std::cout << "move assignment\n";
     if (this != &other) {
         delete[] vectors;
         vectors = other.vectors;
@@ -428,6 +442,18 @@ const vec<T>& vecs<T>::operator()(int index) const {
     return vectors[index];
 }
 
+template <typename T>
+vecs<T> vecs<T>::subset(int start_col, int end_col){
+    int num_rows = this->size();
+    int num_cols = end_col - start_col + 1;
+
+    vecs<T> result(num_cols, num_rows);
+    for (int i = start_col; i <= end_col; i++) {
+        result(i - start_col) = (*this)(i);
+    }
+
+    return result;
+}
 
 template <class T>
 void vecs<T>::printout(){

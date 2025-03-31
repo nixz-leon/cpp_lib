@@ -83,12 +83,109 @@ namespace sm {
         logarithmic
     };
     template <typename T>
+    class ConfusionMatrix {
+    private:
+        matrix<T> conf_matrix;
+        T accuracy;
+        T precision;
+        T recall;
+        T f1_score;
+
+    public:
+        ConfusionMatrix(const vec<T>& actual, const vec<T>& predicted, T threshold = 0.5) {
+            if (actual.size != predicted.size) {
+                throw std::runtime_error("Actual and predicted vectors must be the same size");
+            }
+
+            // Initialize 2x2 confusion matrix
+            conf_matrix = matrix<T>(2, 2);
+            T tp = 0, fp = 0, fn = 0, tn = 0;
+
+            // Fill confusion matrix
+            for (int i = 0; i < actual.size; i++) {
+                bool act = actual(i) > threshold;
+                bool pred = predicted(i) > threshold;
+
+                if (act && pred) tp++;        // True Positive
+                else if (!act && pred) fp++;  // False Positive
+                else if (act && !pred) fn++;  // False Negative
+                else tn++;                    // True Negative
+            }
+
+            conf_matrix(0,0) = tp;
+            conf_matrix(0,1) = fp;
+            conf_matrix(1,0) = fn;
+            conf_matrix(1,1) = tn;
+
+            // Calculate metrics
+            accuracy = (tp + tn) / (tp + tn + fp + fn);
+            precision = tp / (tp + fp);
+            recall = tp / (tp + fn);
+            f1_score = 2 * (precision * recall) / (precision + recall);
+        }
+
+        void print_metrics() const {
+            std::cout << "\nConfusion Matrix:\n";
+            std::cout << "[TP: " << conf_matrix(0,0) << " FP: " << conf_matrix(0,1) << "]\n";
+            std::cout << "[FN: " << conf_matrix(1,0) << " TN: " << conf_matrix(1,1) << "]\n\n";
+            std::cout << "Accuracy:  " << accuracy * 100 << "%\n";
+            std::cout << "Precision: " << precision * 100 << "%\n";
+            std::cout << "Recall:    " << recall * 100 << "%\n";
+            std::cout << "F1 Score:  " << f1_score * 100 << "%\n";
+        }
+
+        // Getters
+        T get_accuracy() const { return accuracy; }
+        T get_precision() const { return precision; }
+        T get_recall() const { return recall; }
+        T get_f1_score() const { return f1_score; }
+        matrix<T> get_matrix() const { return conf_matrix; }
+    };
+
+    template <typename T>
+    std::pair<vecs<T>, vecs<T>> train_test_split(vecs<T>& data, double test_size = 0.2) {
+        int total_size = data.size();
+        int test_count = static_cast<int>(total_size * test_size);
+        int train_count = total_size - test_count;
+        
+        // Create random indices
+        std::vector<int> indices(total_size);
+        std::iota(indices.begin(), indices.end(), 0);
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(indices.begin(), indices.end(), g);
+        
+        // Create training and test sets
+        vecs<T> train_set(data.num_of_vecs(), train_count);
+        vecs<T> test_set(data.num_of_vecs(), test_count);
+        
+        // Fill training set
+        for (int i = 0; i < train_count; i++) {
+            for (int j = 0; j < data.num_of_vecs(); j++) {
+                train_set(j)(i) = data(j)(indices[i]);
+            }
+        }
+        
+        // Fill test set
+        for (int i = 0; i < test_count; i++) {
+            for (int j = 0; j < data.num_of_vecs(); j++) {
+                test_set(j)(i) = data(j)(indices[i + train_count]);
+            }
+        }
+        
+        return {train_set, test_set};
+    };
+
+    template <typename T>
     class Regression_model{
         private:
             vec<T> coefficients;
             modeltype model;
             bool multiple;
+            bool scaled;
+            bool interact;
             vec<T> residuals;
+            vec<T> y_hat;
             T MSE;
             T MSR;
             T SSE;
@@ -99,47 +196,9 @@ namespace sm {
             int df1;
             int df2;
             int tdf;
+            int deg;
         public:
-            void fit(vec<T> x, vec<T> y, modeltype scheme = poly, int degree = 1){
-                int n = x.size;
-                matrix<T> X(n, degree+1);
-                df2 = n-(degree+1);
-                df1 = (degree);
-                tdf = n-1;
-                multiple = false;
-                if(scheme == logarithmic){
-                    for(int i = 0; i < n; i++){
-                        X(i,0) = 1;
-                        y(i) = log(y(i));
-                        for(int j = 1; j <= degree;j++){
-                            X(i,j) = X(i,j-1) * x(i);
-                        }
-                    }
-                }else{
-                    for(int i = 0; i < n; i++){
-                        X(i,0) = 1;
-                        for(int j = 1; j <= degree;j++){
-                            X(i,j) = X(i,j-1) * x(i);
-                        }
-                    }
-                }
-                matrix<T> Xt = transpose(X);
-                matrix<T> XtX = Xt*X;
-                vec<T> XtY = Xt*y;
-                matrix<T> XtX_inv = inverse(XtX);
-                coefficients = XtX_inv * XtY;
-                
-                vec<T> y_hat = X * coefficients;
-                if(scheme == logarithmic){
-                    for(int i =0; i < n; i++){
-                        y_hat(i) = pow(10,y_hat(i));
-                        y(i) = pow(10,y(i));
-                    }
-                }
-                T sum = y.sum();
-                residuals = y_hat - y;
-                Y_bar = sum/n;
-                //I might want to take the stuff below the comment line and place it into a seperate function for a better analysis of 
+            /*
                 vec<T> y_v(n);
                 y_v.set(Y_bar);
                 SSE = residuals*residuals;
@@ -149,15 +208,40 @@ namespace sm {
                 F = MSR/MSE;
                 p = 1-f_distribution_cdf(F, df1, df2);
                 std::cout << p << '\n';
+                */
+            void fit(vecs<T> vs, modeltype scheme = poly, int degree = 1, bool interaction = false){
+                interact = interaction;
+                deg = degree;
+                int n = vs.size();
+                matrix<T> X = design_matrix(vs, interaction, scheme, degree);
+                df2 = n-(X.col-1);
+                df1 = (X.col-1);
+                tdf = n-1;
+                vec<T> y(vs.back());
+                matrix<T> Xt = transpose(X);
+                matrix<T> XtX = Xt*X;
+                vec<T> XtY = Xt*y;
+                matrix<T> XtX_inv = inverse(XtX);
+                coefficients = XtX_inv * XtY;
+
+                y_hat = X * coefficients;
+                if(scheme == logarithmic){
+                    for(int i =0; i < n; i++){
+                        y_hat(i) = pow(10,y_hat(i));
+                        y(i) = pow(10,y(i));
+                    }
+                }
+                T sum = y.sum();
+                residuals = y_hat - y;
+                Y_bar = sum/n;
             };
-            vec<T> get_coefficients() const {
+            
+            vec<T> get_coefficients(){
                 return coefficients;
             };
             T get_F(){
                  return F;
-            }
-
-
+            };
             /*
                 each predictor vector will be a represented by a row in the matrix X.
             */
@@ -174,10 +258,101 @@ namespace sm {
 
             }
             */
+            // Add this to the public section of your Regression_model class
+            ConfusionMatrix<T> get_confusion_matrix(T threshold = 0.5) {
+                if (residuals.size == 0) {
+                    throw std::runtime_error("Model must be fitted before generating confusion matrix");
+                }
+                
+                // Get actual and predicted values
+                vec<T> actual = vec<T>(residuals.size);
+                vec<T> predicted = vec<T>(y_hat);
+                
+                // Calculate predicted values
+                for (int i = 0; i < residuals.size; i++) {
+                    actual(i) = residuals(i) + predicted(i);
+                }
+                
+                return ConfusionMatrix<T>(actual, predicted, threshold);
+            };
             
+            // Add these methods to the public section of the Regression_model class
+            vec<T> predict(vecs<T>& X_test) {
+                matrix<T> X = design_matrix(X_test, interact, model, deg);
+                return X * coefficients;
+            }
+            
+            ConfusionMatrix<T> test(vecs<T>& test_data, T threshold = 0.5) {
+                if (coefficients.size == 0) {
+                    throw std::runtime_error("Model must be fitted before testing");
+                }
+                
+                // Get predictions for test data
+                vec<T> y_test = test_data.back();  // Last column is target
+                vec<T> y_pred = predict(test_data);
+                
+                // Create confusion matrix from test results
+                return ConfusionMatrix<T>(y_test, y_pred, threshold);
+            }
     };
+    template <typename T>
+    matrix<T> design_matrix(vecs<T> xs, bool interactions = true, modeltype scheme = poly, int degree = 1) {
+        int p = xs.num_of_vecs()-1;  // Number of predictors
+        int n = xs.size();         // Number of observations
+        int m;                     // Number of columns in design matrix
 
+        if (p == 1) {
+            // Single predictor case (plus intercept)
+            m = degree + 1;
+            matrix<T> X(n, m);
+            for (int i = 0; i < n; i++) {
+                X(i,0) = 1;  // Intercept term
+                for (int j = 1; j <= degree; j++) {
+                    X(i,j) = pow(xs(0)(i), j);  // Polynomial terms
+                }
+            }
+            return X;
+        } else if (p > 1) {
+            // Multiple predictors case
+            if (interactions) {
+                m = 1 + p*degree;   
+                // Add interaction terms
+                for (int i = 0; i < p-1; i++) {
+                    for (int j = i+1; j < p; j++) {
+                        m++;  // Add each interaction term
+                    }
+                }
+                matrix<T> X(n, m);
+                for (int i = 0; i < n; i++) {
+                    int col = 0;
+                    X(i, col++) = 1;
+                    for (int d = 1; d <= degree; d++) {
+                        for (int j = 0; j < p; j++) {
+                            X(i, col++) = pow(xs(j)(i), d);
+                        }
+                    }
+                    for (int j = 0; j < p; j++) {
+                        for (int k = j+1; k < p; k++) {
+                            X(i, col++) = xs(j)(i) * xs(k)(i);
+                        }
+                    }
+                }
+                return X;
+            } 
+        }
+        m = (p*degree + 1); 
+        matrix<T> X(n, m);
+        for (int i = 0; i < n; i++) {
+            X(i,0) = 1;  // Intercept
+            for(int j = 1; j <= degree; j++){
+                for (int k = 0; k < p; k++) {
+                    X(i, (j-1)*p + k + 1) = std::pow(xs(k)(i), j);
+                }
+            }
+        }
+        return X;
     
+    };
     
     template <typename T>
     void read_data_from_file(std::string filename, vec<T> &X, vec<T> &Y) {
@@ -251,6 +426,9 @@ namespace sm {
         vectors = temp_vecs;
     };
 
+    // Add this after the read_csv function but before the Regression_model class
+    
+
     /*
     template <typename T>
     void graph_data(const vec<T>& x, const vec<T>& y, const vec<T>& coefficients) {
@@ -316,4 +494,157 @@ namespace sm {
         CloseWindow();
     };
     */
+
+    // Add this after the existing code in the sm namespace
+
+    template <typename T>
+    class SVM {
+    private:
+        vec<T> weights;  // Weight vector
+        T bias;          // Bias term
+        T learning_rate; // Learning rate for gradient descent
+        T lambda;        // Regularization parameter
+        int max_iter;    // Maximum number of iterations
+
+    public:
+        SVM(T learning_rate = 0.01, T lambda = 0.01, int max_iter = 1000)
+            : learning_rate(learning_rate), lambda(lambda), max_iter(max_iter), bias(0) {}
+
+        void fit(vecs<T>& data {
+            vecs<T> X = data.subset(0, train_data.num_of_vecs() - 1);
+            vec<T> Y = data.bakc(); 
+            int n_samples = X.size();
+            int n_features = X.num_of_vecs();
+            weights = vec<T>(n_features);
+            weights.set(0); // Initialize weights to zero
+
+            for (int iter = 0; iter < max_iter; iter++) {
+                for (int i = 0; i < n_samples; i++) {
+                    T linear_output = dot_product(X, i) + bias;
+                    T condition = y(i) * linear_output;
+
+                    if (condition >= 1) {
+                        // Update weights for correctly classified samples
+                        for (int j = 0; j < n_features; j++) {
+                            weights(j) -= learning_rate * (2 * lambda * weights(j));
+                        }
+                    } else {
+                        // Update weights and bias for misclassified samples
+                        for (int j = 0; j < n_features; j++) {
+                            weights(j) -= learning_rate * (2 * lambda * weights(j) - y(i) * X(j)(i));
+                        }
+                        bias -= learning_rate * (-y(i));
+                    }
+                }
+            }
+        }
+
+        vec<T> predict(vecs<T>& X){
+            int n_samples = X.size();
+            vec<T> predictions(n_samples);
+
+            for (int i = 0; i < n_samples; i++) {
+                T linear_output = dot_product(X, i) + bias;
+                predictions(i) = (linear_output >= 0) ? 1 : -1;
+            }
+
+            return predictions;
+        }
+
+        ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
+            vecs<T> X = data.subset(0, train_data.num_of_vecs() - 1);
+            vec<T> Y = data.bakc(); 
+            vec<T> predictions = predict(X);
+            return ConfusionMatrix<T>(y, predictions, threshold);
+        }
+
+    private:
+        T dot_product(vecs<T>& X, int sample_index) {
+            T result = 0;
+            for (int j = 0; j < X.num_of_vecs(); j++) {
+                result += weights(j) * X(j)(sample_index);
+            }
+            return result;
+        }
+    };
+
+    template <typename T>
+    class KNN {
+    private:
+        vecs<T> X_train;  // Training features
+        vec<T> y_train;   // Training labels
+        int k;            // Number of neighbors
+
+    public:
+        KNN(int k_neighbors = 3) : k(k_neighbors) {}
+
+        void fit(vecs<T>& data) {
+            X_train = data.subset(0, train_data.num_of_vecs() - 1);
+            y_train = data.bakc();
+        }
+
+        vec<T> predict(vecs<T>& X) {
+            int n_samples = X.size();
+            vec<T> predictions(n_samples);
+
+            for (int i = 0; i < n_samples; i++) {
+                // Compute distances to all training samples
+                vec<T> distances(X_train.size());
+                for (int j = 0; j < X_train.size(); j++) {
+                    distances(j) = euclidean_distance(X, i, X_train, j);
+                }
+
+                // Find the indices of the k smallest distances
+                vec<int> nearest_neighbors(k);
+                for (int j = 0; j < k; j++) {
+                    T min_distance = std::numeric_limits<T>::max();
+                    int min_index = -1;
+                    for (int l = 0; l < distances.size; l++) {
+                        if (distances(l) < min_distance) {
+                            min_distance = distances(l);
+                            min_index = l;
+                        }
+                    }
+                    nearest_neighbors(j) = min_index;
+                    distances(min_index) = std::numeric_limits<T>::max();  // Mark as visited
+                }
+
+                // Count the labels of the k nearest neighbors
+                vec<int> label_counts(y_train.max() + 1);  // Assuming labels are non-negative integers
+                label_counts.set(0);  // Initialize counts to zero
+                for (int j = 0; j < k; j++) {
+                    int label = static_cast<int>(y_train(nearest_neighbors(j)));
+                    label_counts(label)++;
+                }
+
+                // Find the label with the highest count
+                int majority_label = 0;
+                int max_count = label_counts(0);
+                for (int j = 1; j < label_counts.size; j++) {
+                    if (label_counts(j) > max_count) {
+                        majority_label = j;
+                        max_count = label_counts(j);
+                    }
+                }
+
+                predictions(i) = majority_label;
+            }
+
+            return predictions;
+        }
+
+        ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
+            vec<T> predictions = predict(data.subset(0, train_data.num_of_vecs() - 1););
+            return ConfusionMatrix<T>(data.back(); , predictions, threshold);
+        }
+
+    private:
+        T euclidean_distance(vecs<T>& X1, int idx1, vecs<T>& X2, int idx2) {
+            T distance = 0;
+            for (int i = 0; i < X1.num_of_vecs(); i++) {
+                distance += std::pow(X1(i)(idx1) - X2(i)(idx2), 2);
+            }
+            return std::sqrt(distance);
+        }
+    };
 };

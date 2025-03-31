@@ -89,11 +89,15 @@ class matrix {
                 
                 // Load compute shader
                 try {
-                    computeProgram = loadComputeShader("include/matmul.comp");
+                    if constexpr (std::is_same_v<T, float>) {
+                    computeProgram = loadComputeShader("include/matmul_float.comp");
+                } else {
+                    computeProgram = loadComputeShader("include/matmul_double.comp");
+                }
                     glInitialized = true;
                     return true;
                 } catch (const std::runtime_error& e) {
-                    std::cerr << "Shader loading failed: " << e.what() << std::endl;
+                    //std::cerr << "Shader loading failed: " << e.what() << std::endl;
                     glfwDestroyWindow(window);
                     glfwTerminate();
                     return false;
@@ -430,26 +434,45 @@ class matrix {
             const size_t total_elements = a.row * b.col;
             const size_t total_operations = total_elements * a.col;
         
-            // Debug output
-            //std::cout << "Using ";
-            
-            // Use GPU for matrices 512x512 or larger
-            if (total_operations >= GPU_SIZE_THRESHOLD * GPU_SIZE_THRESHOLD) {  // Removed cubic threshold
+            // Check if GPU is available and initialized
+            static bool gpu_available = false;
+            static bool first_check = true;
+        
+            if (first_check) {
                 try {
-                    //std::cout << "GPU multiplication\n";
+                    if (initGL()) {
+                        // Try to load and compile shaders
+                        if constexpr (std::is_same_v<T, float>) {
+                            computeProgram = loadComputeShader("include/matmul_float.comp");
+                        } else {
+                            computeProgram = loadComputeShader("include/matmul_double.comp");
+                        }
+                        gpu_available = true;
+                    }
+                } catch (const std::runtime_error& e) {
+                    std::cerr << "GPU initialization failed, using CPU-only mode: " << e.what() << std::endl;
+                    gpu_available = false;
+                    GPU_SIZE_THRESHOLD = std::numeric_limits<int>::max(); // Disable GPU path
+                }
+                first_check = false;
+            }
+        
+            // Only try GPU path if we know it's available
+            if (gpu_available && total_operations >= GPU_SIZE_THRESHOLD * GPU_SIZE_THRESHOLD) {
+                try {
                     return multiplyGPU(a, b);
                 } catch (const std::runtime_error& e) {
                     std::cerr << "GPU multiplication failed, falling back to CPU: " << e.what() << std::endl;
+                    gpu_available = false; // Disable GPU for future multiplications
+                    GPU_SIZE_THRESHOLD = std::numeric_limits<int>::max();
                 }
             }
         
-            // Use threaded multiplication for medium-sized matrices
+            // CPU paths
             if (total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
-                //std::cout << "threaded CPU multiplication\n";
                 return multiplyThreaded(a, b);
             }
         
-            //std::cout << "sequential CPU multiplication\n";
             return multiplySequential(a, b);
         };
         inline friend matrix<T> operator*(matrix<T> a, T b){matrix<T>temp(a); temp*=b;return temp;};
@@ -692,5 +715,5 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
         temp(i) = sum;
     }
     return temp;
-}
+};
 
