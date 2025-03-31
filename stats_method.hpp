@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <cstdarg>
+#include <iomanip>
 //#include "raylib.h"
 #include "Lin_alg.hpp"
 
@@ -86,60 +87,112 @@ namespace sm {
     class ConfusionMatrix {
     private:
         matrix<T> conf_matrix;
+        vec<T> class_precision;
+        vec<T> class_recall;
+        vec<T> class_f1;
         T accuracy;
-        T precision;
-        T recall;
-        T f1_score;
+        int num_classes;
+        int min_class;  // Changed to int to properly track class numbers
 
     public:
-        ConfusionMatrix(const vec<T>& actual, const vec<T>& predicted, T threshold = 0.5) {
+        ConfusionMatrix(const vec<T>& actual, const vec<T>& predicted) {
             if (actual.size != predicted.size) {
                 throw std::runtime_error("Actual and predicted vectors must be the same size");
             }
 
-            // Initialize 2x2 confusion matrix
-            conf_matrix = matrix<T>(2, 2);
-            T tp = 0, fp = 0, fn = 0, tn = 0;
-
-            // Fill confusion matrix
+            // Find minimum and maximum class labels
+            min_class = static_cast<int>(actual(0));
+            int max_class = min_class;
+            
             for (int i = 0; i < actual.size; i++) {
-                bool act = actual(i) > threshold;
-                bool pred = predicted(i) > threshold;
-
-                if (act && pred) tp++;        // True Positive
-                else if (!act && pred) fp++;  // False Positive
-                else if (act && !pred) fn++;  // False Negative
-                else tn++;                    // True Negative
+                min_class = std::min(min_class, static_cast<int>(actual(i)));
+                min_class = std::min(min_class, static_cast<int>(predicted(i)));
+                max_class = std::max(max_class, static_cast<int>(actual(i)));
+                max_class = std::max(max_class, static_cast<int>(predicted(i)));
             }
 
-            conf_matrix(0,0) = tp;
-            conf_matrix(0,1) = fp;
-            conf_matrix(1,0) = fn;
-            conf_matrix(1,1) = tn;
+            // Number of classes is max - min + 1
+            num_classes = max_class - min_class + 1;
+
+            // Initialize confusion matrix and metrics vectors
+            conf_matrix = matrix<T>(num_classes, num_classes);
+            class_precision = vec<T>(num_classes);
+            class_recall = vec<T>(num_classes);
+            class_f1 = vec<T>(num_classes);
+
+            // Fill confusion matrix (adjusting indices by min_class)
+            for (int i = 0; i < actual.size; i++) {
+                int act = static_cast<int>(actual(i)) - min_class;
+                int pred = static_cast<int>(predicted(i)) - min_class;
+                conf_matrix(act, pred)++;
+            }
 
             // Calculate metrics
-            accuracy = (tp + tn) / (tp + tn + fp + fn);
-            precision = tp / (tp + fp);
-            recall = tp / (tp + fn);
-            f1_score = 2 * (precision * recall) / (precision + recall);
+            T total_correct = 0;
+            T total_samples = actual.size;
+
+            for (int i = 0; i < num_classes; i++) {
+                T tp = conf_matrix(i, i);
+                total_correct += tp;
+
+                T col_sum = 0;
+                T row_sum = 0;
+                for (int j = 0; j < num_classes; j++) {
+                    col_sum += conf_matrix(j, i);
+                    row_sum += conf_matrix(i, j);
+                }
+
+                class_precision(i) = col_sum > 0 ? tp / col_sum : 0;
+                class_recall(i) = row_sum > 0 ? tp / row_sum : 0;
+                class_f1(i) = (class_precision(i) + class_recall(i)) > 0 ? 
+                             2 * (class_precision(i) * class_recall(i)) / (class_precision(i) + class_recall(i)) : 0;
+            }
+
+            accuracy = total_correct / total_samples;
         }
 
-        void print_metrics() const {
-            std::cout << "\nConfusion Matrix:\n";
-            std::cout << "[TP: " << conf_matrix(0,0) << " FP: " << conf_matrix(0,1) << "]\n";
-            std::cout << "[FN: " << conf_matrix(1,0) << " TN: " << conf_matrix(1,1) << "]\n\n";
-            std::cout << "Accuracy:  " << accuracy * 100 << "%\n";
-            std::cout << "Precision: " << precision * 100 << "%\n";
-            std::cout << "Recall:    " << recall * 100 << "%\n";
-            std::cout << "F1 Score:  " << f1_score * 100 << "%\n";
+        void print_metrics(bool detailed = false) const {
+            std::cout << "\nConfusion Matrix:" << std::endl;
+            std::cout << "Actual (rows) vs Predicted (columns)" << std::endl;
+            if(detailed)std::cout << "Min class: " << min_class << ", Num classes: " << num_classes << std::endl;
+            
+            // Print column headers
+            std::cout << "     ";
+            for (int j = 0; j < num_classes; j++) {
+                std::cout << std::setw(4) << (j + min_class);
+            }
+            std::cout << std::endl;
+
+            // Print matrix with row labels
+            for (int i = 0; i < num_classes; i++) {
+                std::cout << std::setw(4) << (i + min_class) << " ";
+                for (int j = 0; j < num_classes; j++) {
+                    std::cout << std::setw(4) << conf_matrix(i,j);
+                }
+                std::cout << std::endl;
+            }
+            if(detailed){
+                std::cout << "\nPer-class metrics:" << std::endl;
+                for (int i = 0; i < num_classes; i++) {
+                    std::cout << "\nClass " << (i + min_class) << ":" << std::endl;
+                    std::cout << "Precision: " << std::fixed << std::setprecision(2) 
+                            << class_precision(i) * 100 << "%" << std::endl;
+                    std::cout << "Recall:    " << class_recall(i) * 100 << "%" << std::endl;
+                    std::cout << "F1 Score:  " << class_f1(i) * 100 << "%" << std::endl;
+                }
+            }
+
+            std::cout << "\nOverall Accuracy: " << std::fixed << std::setprecision(2) 
+                     << accuracy * 100 << "%" << std::endl;
         }
 
         // Getters
         T get_accuracy() const { return accuracy; }
-        T get_precision() const { return precision; }
-        T get_recall() const { return recall; }
-        T get_f1_score() const { return f1_score; }
+        vec<T> get_precision() const { return class_precision; }
+        vec<T> get_recall() const { return class_recall; }
+        vec<T> get_f1_score() const { return class_f1; }
         matrix<T> get_matrix() const { return conf_matrix; }
+        int get_num_classes() const { return num_classes; }
     };
 
     template <typename T>
@@ -273,7 +326,7 @@ namespace sm {
                     actual(i) = residuals(i) + predicted(i);
                 }
                 
-                return ConfusionMatrix<T>(actual, predicted, threshold);
+                return ConfusionMatrix<T>(actual, predicted);
             };
             
             // Add these methods to the public section of the Regression_model class
@@ -292,7 +345,7 @@ namespace sm {
                 vec<T> y_pred = predict(test_data);
                 
                 // Create confusion matrix from test results
-                return ConfusionMatrix<T>(y_test, y_pred, threshold);
+                return ConfusionMatrix<T>(y_test, y_pred);
             }
     };
     template <typename T>
@@ -500,69 +553,154 @@ namespace sm {
     template <typename T>
     class SVM {
     private:
-        vec<T> weights;  // Weight vector
-        T bias;          // Bias term
-        T learning_rate; // Learning rate for gradient descent
-        T lambda;        // Regularization parameter
-        int max_iter;    // Maximum number of iterations
+        matrix<T> all_weights;
+        vec<T> all_biases;
+        T learning_rate;
+        T lambda;
+        int max_iter;
+        int num_classes;
+        int min_class;  // Add this to private members
+        vec<T> feature_means;    // Add feature scaling
+        vec<T> feature_stds;     // Add feature scaling
 
     public:
         SVM(T learning_rate = 0.01, T lambda = 0.01, int max_iter = 1000)
-            : learning_rate(learning_rate), lambda(lambda), max_iter(max_iter), bias(0) {}
+            : learning_rate(learning_rate), lambda(lambda), max_iter(max_iter) {}
 
         void fit(vecs<T>& data) {
             vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
-            vec<T> y = data.back(); 
+            vec<T> y = data.back();
+            
+            // Scale features
+            scale_features(X);
+            
+            // Find number of classes and store min_class
+            min_class = static_cast<int>(y(0));
+            T max_class = y(0);
+            for (int i = 0; i < y.size; i++) {
+                min_class = std::min(min_class, static_cast<int>(y(i)));
+                max_class = std::max(max_class, y(i));
+            }
+            num_classes = static_cast<int>(max_class - min_class + 1);
+            
             int n_samples = X.size();
             int n_features = X.num_of_vecs();
-            weights = vec<T>(n_features);
-            weights.set(0); // Initialize weights to zero
+            
+            // Initialize weights and biases
+            all_weights = matrix<T>(num_classes, n_features);
+            all_biases = vec<T>(num_classes);
+            all_biases.set(0);
 
-            for (int iter = 0; iter < max_iter; iter++) {
+            // Train one classifier per class
+            for (int c = 0; c < num_classes; c++) {
+                // Create binary labels
+                vec<T> binary_labels(n_samples);
                 for (int i = 0; i < n_samples; i++) {
-                    T linear_output = dot_product(X, i) + bias;
-                    T condition = y(i) * linear_output;
+                    binary_labels(i) = (y(i) == (c + min_class)) ? 1 : -1;
+                }
 
-                    if (condition >= 1) {
-                        // Update weights for correctly classified samples
-                        for (int j = 0; j < n_features; j++) {
-                            weights(j) -= learning_rate * (2 * lambda * weights(j));
+                // Train binary classifier
+                T prev_loss = std::numeric_limits<T>::max();
+                for (int iter = 0; iter < max_iter; iter++) {
+                    T loss = 0;
+                    for (int i = 0; i < n_samples; i++) {
+                        T linear_output = dot_product(X, i, c) + all_biases(c);
+                        T hinge_loss = std::max(T(0), T(1) - binary_labels(i) * linear_output);
+                        loss += hinge_loss;
+
+                        if (hinge_loss > 0) {
+                            // Update weights and bias for misclassified samples
+                            for (int j = 0; j < n_features; j++) {
+                                T gradient = -binary_labels(i) * X(j)(i) + 2 * lambda * all_weights(c, j);
+                                all_weights(c, j) -= learning_rate * gradient;
+                            }
+                            all_biases(c) += learning_rate * binary_labels(i);
                         }
-                    } else {
-                        // Update weights and bias for misclassified samples
-                        for (int j = 0; j < n_features; j++) {
-                            weights(j) -= learning_rate * (2 * lambda * weights(j) - y(i) * X(j)(i));
-                        }
-                        bias -= learning_rate * (-y(i));
                     }
+                    
+                    // Early stopping if loss improvement is small
+                    if (std::abs(loss - prev_loss) < 1e-5) break;
+                    prev_loss = loss;
                 }
             }
         }
 
-        vec<T> predict(vecs<T>& X){
+        vec<T> predict(vecs<T>& X_input) {
+            // Scale input features using stored means and stds
+            vecs<T> X = scale_input(X_input);
+            
             int n_samples = X.size();
             vec<T> predictions(n_samples);
 
             for (int i = 0; i < n_samples; i++) {
-                T linear_output = dot_product(X, i) + bias;
-                predictions(i) = (linear_output >= 0) ? 1 : -1;
+                T max_score = -std::numeric_limits<T>::max();
+                int best_class = min_class;  // Start with minimum class value
+
+                for (int c = 0; c < num_classes; c++) {
+                    T score = dot_product(X, i, c) + all_biases(c);
+                    if (score > max_score) {
+                        max_score = score;
+                        best_class = min_class + c;  // Adjust class label by min_class
+                    }
+                }
+                predictions(i) = best_class;
             }
 
             return predictions;
         }
 
-        ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
-            vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
-            vec<T> y = data.back(); 
+        ConfusionMatrix<T> test(vecs<T>& test_data) {
+            vecs<T> X = test_data.subset(0, test_data.num_of_vecs() - 1);
+            vec<T> y = test_data.back();
             vec<T> predictions = predict(X);
-            return ConfusionMatrix<T>(y, predictions, threshold);
+            return ConfusionMatrix<T>(y, predictions);
         }
 
     private:
-        T dot_product(vecs<T>& X, int sample_index) {
+        void scale_features(vecs<T>& X) {
+            int n_features = X.num_of_vecs();
+            feature_means = vec<T>(n_features);
+            feature_stds = vec<T>(n_features);
+            
+            for (int j = 0; j < n_features; j++) {
+                // Calculate mean
+                T mean = 0;
+                for (int i = 0; i < X.size(); i++) {
+                    mean += X(j)(i);
+                }
+                mean /= X.size();
+                feature_means(j) = mean;
+                
+                // Calculate std
+                T std = 0;
+                for (int i = 0; i < X.size(); i++) {
+                    std += (X(j)(i) - mean) * (X(j)(i) - mean);
+                }
+                std = std::sqrt(std / X.size());
+                if (std < 1e-10) std = 1;
+                feature_stds(j) = std;
+                
+                // Scale features
+                for (int i = 0; i < X.size(); i++) {
+                    X(j)(i) = (X(j)(i) - mean) / std;
+                }
+            }
+        }
+
+        vecs<T> scale_input(vecs<T>& X) {
+            vecs<T> X_scaled = X;
+            for (int j = 0; j < X.num_of_vecs(); j++) {
+                for (int i = 0; i < X.size(); i++) {
+                    X_scaled(j)(i) = (X(j)(i) - feature_means(j)) / feature_stds(j);
+                }
+            }
+            return X_scaled;
+        }
+
+        T dot_product(vecs<T>& X, int sample_index, int class_index) {
             T result = 0;
             for (int j = 0; j < X.num_of_vecs(); j++) {
-                result += weights(j) * X(j)(sample_index);
+                result += all_weights(class_index, j) * X(j)(sample_index);
             }
             return result;
         }
@@ -636,7 +774,7 @@ namespace sm {
         ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
             vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
             vec<T> predictions = predict(X);
-            return ConfusionMatrix<T>(data.back() , predictions, threshold);
+            return ConfusionMatrix<T>(data.back() , predictions);
         }
 
     private:
