@@ -87,12 +87,12 @@ namespace sm {
     class ConfusionMatrix {
     private:
         matrix<T> conf_matrix;
-        vec<T> class_precision;
-        vec<T> class_recall;
-        vec<T> class_f1;
         T accuracy;
+        T precision;
+        T recall;
+        T f1_score;
         int num_classes;
-        int min_class;  // Changed to int to properly track class numbers
+        int min_class;
 
     public:
         ConfusionMatrix(const vec<T>& actual, const vec<T>& predicted) {
@@ -100,10 +100,9 @@ namespace sm {
                 throw std::runtime_error("Actual and predicted vectors must be the same size");
             }
 
-            // Find minimum and maximum class labels
+            // Find min and max class labels
             min_class = static_cast<int>(actual(0));
             int max_class = min_class;
-            
             for (int i = 0; i < actual.size; i++) {
                 min_class = std::min(min_class, static_cast<int>(actual(i)));
                 min_class = std::min(min_class, static_cast<int>(predicted(i)));
@@ -111,16 +110,10 @@ namespace sm {
                 max_class = std::max(max_class, static_cast<int>(predicted(i)));
             }
 
-            // Number of classes is max - min + 1
             num_classes = max_class - min_class + 1;
-
-            // Initialize confusion matrix and metrics vectors
             conf_matrix = matrix<T>(num_classes, num_classes);
-            class_precision = vec<T>(num_classes);
-            class_recall = vec<T>(num_classes);
-            class_f1 = vec<T>(num_classes);
 
-            // Fill confusion matrix (adjusting indices by min_class)
+            // Fill confusion matrix
             for (int i = 0; i < actual.size; i++) {
                 int act = static_cast<int>(actual(i)) - min_class;
                 int pred = static_cast<int>(predicted(i)) - min_class;
@@ -128,71 +121,70 @@ namespace sm {
             }
 
             // Calculate metrics
-            T total_correct = 0;
             T total_samples = actual.size;
+            T total_correct = 0;
+            T total_precision = 0;
+            T total_recall = 0;
+            int valid_classes = 0;
 
+            // Calculate per-class metrics and average them
             for (int i = 0; i < num_classes; i++) {
-                T tp = conf_matrix(i, i);
-                total_correct += tp;
-
-                T col_sum = 0;
-                T row_sum = 0;
+                T true_positive = conf_matrix(i, i);
+                T false_positive = 0;
+                T false_negative = 0;
+                
+                // Calculate row and column sums excluding true positive
                 for (int j = 0; j < num_classes; j++) {
-                    col_sum += conf_matrix(j, i);
-                    row_sum += conf_matrix(i, j);
+                    if (i != j) {
+                        false_positive += conf_matrix(j, i);  // Sum of column minus TP
+                        false_negative += conf_matrix(i, j);  // Sum of row minus TP
+                    }
                 }
 
-                class_precision(i) = col_sum > 0 ? tp / col_sum : 0;
-                class_recall(i) = row_sum > 0 ? tp / row_sum : 0;
-                class_f1(i) = (class_precision(i) + class_recall(i)) > 0 ? 
-                             2 * (class_precision(i) * class_recall(i)) / (class_precision(i) + class_recall(i)) : 0;
+                total_correct += true_positive;
+
+                // Only include classes that appear in the data
+                if (true_positive + false_positive + false_negative > 0) {
+                    T class_precision = (true_positive + false_positive > 0) ? 
+                        true_positive / (true_positive + false_positive) : 0;
+                    T class_recall = (true_positive + false_negative > 0) ? 
+                        true_positive / (true_positive + false_negative) : 0;
+                    
+                    total_precision += class_precision;
+                    total_recall += class_recall;
+                    valid_classes++;
+                }
             }
 
+            // Calculate final metrics
             accuracy = total_correct / total_samples;
+            
+            if (valid_classes > 0) {
+                precision = total_precision / valid_classes;
+                recall = total_recall / valid_classes;
+                f1_score = (precision + recall > 0) ? 
+                    2 * (precision * recall) / (precision + recall) : 0;
+            } else {
+                precision = 0;
+                recall = 0;
+                f1_score = 0;
+            }
         }
 
-        void print_metrics(bool detailed = false) const {
-            std::cout << "\nConfusion Matrix:" << std::endl;
-            std::cout << "Actual (rows) vs Predicted (columns)" << std::endl;
-            if(detailed)std::cout << "Min class: " << min_class << ", Num classes: " << num_classes << std::endl;
-            
-            // Print column headers
-            std::cout << "     ";
-            for (int j = 0; j < num_classes; j++) {
-                std::cout << std::setw(4) << (j + min_class);
-            }
-            std::cout << std::endl;
-
-            // Print matrix with row labels
-            for (int i = 0; i < num_classes; i++) {
-                std::cout << std::setw(4) << (i + min_class) << " ";
-                for (int j = 0; j < num_classes; j++) {
-                    std::cout << std::setw(4) << conf_matrix(i,j);
-                }
-                std::cout << std::endl;
-            }
-            if(detailed){
-                std::cout << "\nPer-class metrics:" << std::endl;
-                for (int i = 0; i < num_classes; i++) {
-                    std::cout << "\nClass " << (i + min_class) << ":" << std::endl;
-                    std::cout << "Precision: " << std::fixed << std::setprecision(2) 
-                            << class_precision(i) * 100 << "%" << std::endl;
-                    std::cout << "Recall:    " << class_recall(i) * 100 << "%" << std::endl;
-                    std::cout << "F1 Score:  " << class_f1(i) * 100 << "%" << std::endl;
-                }
-            }
-
-            std::cout << "\nOverall Accuracy: " << std::fixed << std::setprecision(2) 
+        void print_metrics() const {
+            std::cout << "\nModel Performance Metrics:" << std::endl;
+            std::cout << "Accuracy:  " << std::fixed << std::setprecision(2) 
                      << accuracy * 100 << "%" << std::endl;
+            std::cout << "Precision: " << precision * 100 << "%" << std::endl;
+            std::cout << "Recall:    " << recall * 100 << "%" << std::endl;
+            std::cout << "F1 Score:  " << f1_score * 100 << "%" << std::endl;
         }
 
         // Getters
         T get_accuracy() const { return accuracy; }
-        vec<T> get_precision() const { return class_precision; }
-        vec<T> get_recall() const { return class_recall; }
-        vec<T> get_f1_score() const { return class_f1; }
-        matrix<T> get_matrix() const { return conf_matrix; }
-        int get_num_classes() const { return num_classes; }
+        T get_precision() const { return precision; }
+        T get_recall() const { return recall; }
+        T get_f1_score() const { return f1_score; }
     };
 
     template <typename T>
