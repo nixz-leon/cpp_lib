@@ -510,9 +510,9 @@ namespace sm {
         SVM(T learning_rate = 0.01, T lambda = 0.01, int max_iter = 1000)
             : learning_rate(learning_rate), lambda(lambda), max_iter(max_iter), bias(0) {}
 
-        void fit(vecs<T>& data {
-            vecs<T> X = data.subset(0, train_data.num_of_vecs() - 1);
-            vec<T> Y = data.bakc(); 
+        void fit(vecs<T>& data) {
+            vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
+            vec<T> y = data.back(); 
             int n_samples = X.size();
             int n_features = X.num_of_vecs();
             weights = vec<T>(n_features);
@@ -552,8 +552,8 @@ namespace sm {
         }
 
         ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
-            vecs<T> X = data.subset(0, train_data.num_of_vecs() - 1);
-            vec<T> Y = data.bakc(); 
+            vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
+            vec<T> y = data.back(); 
             vec<T> predictions = predict(X);
             return ConfusionMatrix<T>(y, predictions, threshold);
         }
@@ -579,8 +579,8 @@ namespace sm {
         KNN(int k_neighbors = 3) : k(k_neighbors) {}
 
         void fit(vecs<T>& data) {
-            X_train = data.subset(0, train_data.num_of_vecs() - 1);
-            y_train = data.bakc();
+            X_train = data.subset(0, data.num_of_vecs() - 1);
+            y_train = data.back();
         }
 
         vec<T> predict(vecs<T>& X) {
@@ -634,8 +634,9 @@ namespace sm {
         }
 
         ConfusionMatrix<T> test(vecs<T>& data, T threshold = 0.5) {
-            vec<T> predictions = predict(data.subset(0, train_data.num_of_vecs() - 1););
-            return ConfusionMatrix<T>(data.back(); , predictions, threshold);
+            vecs<T> X = data.subset(0, data.num_of_vecs() - 1);
+            vec<T> predictions = predict(X);
+            return ConfusionMatrix<T>(data.back() , predictions, threshold);
         }
 
     private:
