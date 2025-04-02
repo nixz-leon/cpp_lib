@@ -9,7 +9,7 @@
 #include <chrono>
 
 #include "vec.hpp"
-#include "matrix.hpp"
+#include "matricies.hpp"
 
 template <typename T> 
 inline void gausian_reduction(matrix<T> &a){

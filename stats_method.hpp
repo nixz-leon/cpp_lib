@@ -188,40 +188,6 @@ namespace sm {
     };
 
     template <typename T>
-    std::pair<vecs<T>, vecs<T>> train_test_split(vecs<T>& data, double test_size = 0.2) {
-        int total_size = data.size();
-        int test_count = static_cast<int>(total_size * test_size);
-        int train_count = total_size - test_count;
-        
-        // Create random indices
-        std::vector<int> indices(total_size);
-        std::iota(indices.begin(), indices.end(), 0);
-        std::random_device rd;
-        std::mt19937 g(rd());
-        std::shuffle(indices.begin(), indices.end(), g);
-        
-        // Create training and test sets
-        vecs<T> train_set(data.num_of_vecs(), train_count);
-        vecs<T> test_set(data.num_of_vecs(), test_count);
-        
-        // Fill training set
-        for (int i = 0; i < train_count; i++) {
-            for (int j = 0; j < data.num_of_vecs(); j++) {
-                train_set(j)(i) = data(j)(indices[i]);
-            }
-        }
-        
-        // Fill test set
-        for (int i = 0; i < test_count; i++) {
-            for (int j = 0; j < data.num_of_vecs(); j++) {
-                test_set(j)(i) = data(j)(indices[i + train_count]);
-            }
-        }
-        
-        return {train_set, test_set};
-    };
-
-    template <typename T>
     class Regression_model{
         private:
             vec<T> coefficients;

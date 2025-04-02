@@ -1,18 +1,6 @@
 #pragma once
-#ifndef iostream
-#include <iostream>
-#endif
-#ifndef string
-#include <string>
-#endif
-#ifndef cstring
-#include <cstring>
-#endif
 #ifndef vec_hpp
 #include "vec.hpp"
-#endif
-#ifndef  random
-#include <random>
 #endif
 #ifndef vector
 #include <vector>
@@ -20,20 +8,17 @@
 #ifndef thread
 #include <thread>
 #endif 
-#ifndef functional
-#include <functional>
-#endif
 #ifndef glad
 #include <glad/glad.h>
 #endif
 #ifndef glfw3
 #include <GLFW/glfw3.h>
 #endif
-#ifndef algorithm
-#include <algorithm>
-#endif
 #ifndef windows
 #include <windows.h>
+#endif
+#ifndef sstream
+#include <sstream>
 #endif
 
 template <typename T>
@@ -114,8 +99,8 @@ class matrix {
             }
             std::stringstream buffer;
             buffer << file.rdbuf();
-            std::string shaderSource = buffer.str();
-            const char* sourcePtr = shaderSource.c_str();
+            std::string shader_source = buffer.str();
+            const char* sourcePtr = shader_source.c_str();
     
             GLuint computeShader = glCreateShader(GL_COMPUTE_SHADER);
             glShaderSource(computeShader, 1, &sourcePtr, nullptr);
@@ -557,9 +542,13 @@ matrix<T>::matrix(const matrix<T> &other){
 
 template <typename T>
 inline matrix<T> &matrix<T>::operator=(matrix<T> &other){
-    this->row = other.row;
-    this->col = other.col;
-    std::memcpy(this->data, other.data, sizeof(T)*other.col*other.row);
+    if (this != &other) {  // Self-assignment check
+        delete[] data;  // Free existing memory
+        data = new T[other.row * other.col];  // Allocate new memory
+        row = other.row;
+        col = other.col;
+        std::memcpy(data, other.data, sizeof(T)*col*row);
+    }
     return *this;
 }
 

@@ -11,6 +11,21 @@
 #ifndef ffteasyjj_cpp
 #include "ffteasyjj.cpp"
 #endif
+#ifndef vector
+#include <vector>
+#endif
+#ifndef cmath
+#include <cmath>
+#endif
+#ifndef algorithm
+#include <algorithm>
+#endif
+#ifndef functional
+#include <functional>
+#endif
+#ifndef  random
+#include <random>
+#endif
 
 
 template<class T>
@@ -51,6 +66,7 @@ template <typename T> class vec{
         
         inline vec<T> operator+=(vec<T> &other);
         inline vec<T> operator-=(vec<T> &other);
+
         inline vec<T> operator*=(T &c);
         inline vec<T> operator*=(const T &c);
         inline vec<T> operator++();
@@ -226,7 +242,9 @@ inline void vec<T>::row_swap(int a, int b){
     if(a > size-1){std::cout << "Tried to access elm " << a << ", But size is " << size-1 << '\n';exit(0);}
     if(b > size-1){std::cout << "Tried to access elm " << b << ", But size is " << size-1 << '\n';exit(0);}
     if(a==b){return;}
-    T temp = data[a];data[a] = b; data[b]= temp;
+    T temp = data[a];
+    data[a] = data[b];
+    data[b] = temp;
 };
 
 template <class T>
@@ -262,6 +280,26 @@ inline vec<T> vec<T>::operator+=(vec<T> &other)
         this->data[i] += other(i);
     }
     return *this;
+};
+
+template <class T>
+bool operator==(vec<T> a,vec<T> b){
+    if(a.size != b.size){return false;}
+    for(int i =0; i < b.size;i++){
+        if(a(i) != b(i))return false;
+    }
+    return true;
+};
+
+template <class T>
+bool operator!=(vec<T> a,vec<T> b){
+    if(a.size != b.size){return true;}
+    for(int i =0; i < b.size;i++){
+        if(a(i) != b(i))return true;
+    }
+    return false;
+
+
 };
 
 template <class T>
@@ -330,7 +368,6 @@ public:
     ~vecs(); // Destructor
     vec<T>& operator()(int index); // Access operator
     const vec<T>& operator()(int index) const;
-
     int num_of_vecs(){return num_vecs;};
     int size(){return size_of_vecs;};
 
@@ -346,11 +383,9 @@ vecs<T>::vecs() : vectors(nullptr), num_vecs(0), size_of_vecs(0) {}
 // Parameterized constructor
 template <class T>
 vecs<T>::vecs(int num_vec, int size) : num_vecs(num_vec), size_of_vecs(size) {
-    //vectors = new vec<T>[num_vecs]; // Allocate array of vec<T>
-    vec<T> temp(size);
-    vectors = (vec<T>*)std::calloc(num_vec,sizeof(temp));
+    vectors = new vec<T>[num_vecs];  // Use new instead of calloc
     for (int i = 0; i < num_vecs; ++i) {
-        vectors[i] = temp; // Initialize each vec<T>
+        vectors[i] = vec<T>(size);  // Initialize each vector with proper size
     }
 }
 
@@ -358,9 +393,7 @@ vecs<T>::vecs(int num_vec, int size) : num_vecs(num_vec), size_of_vecs(size) {
 // Copy constructor
 template <class T>
 vecs<T>::vecs(const vecs<T>& other) : num_vecs(other.num_vecs), size_of_vecs(other.size_of_vecs) {
-    //std::cout << "copy\n";
-    vec<T> temp(size_of_vecs);
-    vectors = (vec<T>*)std::calloc(num_vecs,sizeof(temp));
+    vectors = new vec<T>[num_vecs];  // Use new instead of calloc
     for (int i = 0; i < num_vecs; ++i) {
         vectors[i] = other.vectors[i];
     }
@@ -375,13 +408,9 @@ vecs<T>& vecs<T>::operator=(const vecs<T>& other) {
         }
         num_vecs = other.num_vecs;
         size_of_vecs = other.size_of_vecs;        
-        vectors = (vec<T>*)std::calloc(num_vecs,sizeof(vec<T>));
-        if (!vectors) {
-            throw std::runtime_error("Memory allocation failed");
-        }
+        vectors = new vec<T>[num_vecs];  // Use new instead of calloc
         
         for (int i = 0; i < num_vecs; ++i) {
-            new (&vectors[i]) vec<T>(size_of_vecs);
             vectors[i] = other.vectors[i];
         }
     }
@@ -400,9 +429,8 @@ vecs<T>::vecs(vecs<T>&& other) noexcept : vectors(other.vectors), num_vecs(other
 // Move assignment operator
 template <class T>
 vecs<T>& vecs<T>::operator=(vecs<T>&& other) noexcept {
-    //std::cout << "move assignment\n";
     if (this != &other) {
-        delete[] vectors;
+        delete[] vectors;  // Use delete[] instead of free
         vectors = other.vectors;
         num_vecs = other.num_vecs;
         size_of_vecs = other.size_of_vecs;
@@ -416,13 +444,8 @@ vecs<T>& vecs<T>::operator=(vecs<T>&& other) noexcept {
 // Destructor
 template <class T>
 vecs<T>::~vecs() {
-    if (vectors != nullptr) {
-        for (int i = 0; i < num_vecs; ++i) {
-            vectors[i].~vec<T>();
-        }
-        std::free(vectors);
-        vectors = nullptr;
-    }
+    delete[] vectors;  // Use delete[] instead of free
+    vectors = nullptr;
 }
 
 // Access operator
@@ -443,15 +466,13 @@ const vec<T>& vecs<T>::operator()(int index) const {
 }
 
 template <typename T>
-vecs<T> vecs<T>::subset(int start_col, int end_col){
-    int num_rows = this->size();
-    int num_cols = end_col - start_col + 1;
-
-    vecs<T> result(num_cols, num_rows);
-    for (int i = start_col; i <= end_col; i++) {
-        result(i - start_col) = (*this)(i);
+vecs<T> vecs<T>::subset(int start_index, int end_index){
+    //int num_rows = this->size();
+    int new_num = end_index - start_index + 1;
+    vecs<T> result(new_num, size_of_vecs);
+    for (int i = start_index; i <= end_index; i++) {
+        result(i - start_index) = vectors[i];
     }
-
     return result;
 }
 
@@ -471,3 +492,37 @@ void vecs<T>::printout(){
         std::cout << '\n';
     }
 }
+
+template <typename T>
+    std::pair<vecs<T>, vecs<T>> train_test_split(vecs<T>& data, double test_size = 0.2) {
+        int total_size = data.size();
+        int test_count = static_cast<int>(total_size * test_size);
+        int train_count = total_size - test_count;
+        
+        // Create random indices
+        std::vector<int> indices(total_size);
+        std::iota(indices.begin(), indices.end(), 0);
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(indices.begin(), indices.end(), g);
+        
+        // Create training and test sets
+        vecs<T> train_set(data.num_of_vecs(), train_count);
+        vecs<T> test_set(data.num_of_vecs(), test_count);
+        
+        // Fill training set
+        for (int i = 0; i < train_count; i++) {
+            for (int j = 0; j < data.num_of_vecs(); j++) {
+                train_set(j)(i) = data(j)(indices[i]);
+            }
+        }
+        
+        // Fill test set
+        for (int i = 0; i < test_count; i++) {
+            for (int j = 0; j < data.num_of_vecs(); j++) {
+                test_set(j)(i) = data(j)(indices[i + train_count]);
+            }
+        }
+        
+        return {train_set, test_set};
+    };
