@@ -396,7 +396,7 @@ namespace sm {
         
     };
     template <typename T>
-    void read_csv(std::string filename, vecs<T> &vectors, bool header = false) {
+    void read_csv(std::string filename, vecs<T> &vectors, bool header = false, char delimiter = ',') {
         std::ifstream file(filename);
         if (!file.is_open()) {
             throw std::runtime_error("Could not open file");
@@ -410,7 +410,7 @@ namespace sm {
             std::stringstream ss(line);
             std::vector<T> row;
             std::string value;
-            while (std::getline(ss, value, ',')) { // Properly handling CSV format
+            while (std::getline(ss, value, delimiter)) { // Properly handling CSV format
                 std::stringstream valueStream(value);
                 T convertedValue;
                 valueStream >> convertedValue;
@@ -427,7 +427,9 @@ namespace sm {
         }
 
         int num_cols = rows[0].size();
+        std::cout << "Number of columns: " << num_cols << std::endl;
         int num_rows = rows.size();
+        std::cout << "Number of rows: " << num_rows << std::endl;
         vecs<T> temp_vecs(num_cols, num_rows);
         for (int j = 0; j < num_cols; j++) {
             for (int i = 0; i < num_rows; i++) {

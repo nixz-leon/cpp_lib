@@ -21,6 +21,11 @@
 #include <sstream>
 #endif
 
+// GPU acceleration check - include adapter if enabled
+#ifdef GPU_ACCELERATION_ENABLED
+#include "GPUVecAdapter.hpp"
+#endif
+
 template <typename T>
 class matrix {  
     public: //this are memory functions
@@ -37,12 +42,13 @@ class matrix {
         ~matrix();
         int row;
         int col;
+        T *data; // Making public to allow GPU adapter direct access
+
     private:
-        T *data;
         static GLFWwindow* window;
         static GLuint computeProgram;
         static bool glInitialized;
-        static bool capabilities_detected;  // Add this line
+        static bool capabilities_detected;
         static int GPU_SIZE_THRESHOLD;
         static int THREAD_SIZE_THRESHOLD;
         static int CACHE_BLOCK_SIZE;
@@ -75,14 +81,13 @@ class matrix {
                 // Load compute shader
                 try {
                     if constexpr (std::is_same_v<T, float>) {
-                    computeProgram = loadComputeShader("include/matmul_float.comp");
-                } else {
-                    computeProgram = loadComputeShader("include/matmul_double.comp");
-                }
+                        computeProgram = loadComputeShader("include/shaders/matmul_float.comp");
+                    } else {
+                        computeProgram = loadComputeShader("include/shaders/matmul_double.comp");
+                    }
                     glInitialized = true;
                     return true;
                 } catch (const std::runtime_error& e) {
-                    //std::cerr << "Shader loading failed: " << e.what() << std::endl;
                     glfwDestroyWindow(window);
                     glfwTerminate();
                     return false;
@@ -92,6 +97,7 @@ class matrix {
                 return false;
             }
         };
+        
         static GLuint loadComputeShader(const char* filepath) {
             std::ifstream file(filepath);
             if (!file.is_open()) {
@@ -287,91 +293,6 @@ class matrix {
             return result;
         };
 
-        static inline matrix<T> multiplyGPU(const matrix<T>& a, const matrix<T>& b) {
-            if (!glInitialized && !initGL()) {
-                throw std::runtime_error("Failed to initialize OpenGL");
-            }
-        
-            // Check if double precision is supported
-            if constexpr (std::is_same_v<T, double>) {
-                GLint doublePrecisionSupported;
-                // Check for GL_ARB_gpu_shader_fp64 extension
-                GLint numExtensions;
-                glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
-                bool hasDoublePrecision = false;
-                
-                for (GLint i = 0; i < numExtensions; ++i) {
-                    const GLubyte* extension = glGetStringi(GL_EXTENSIONS, i);
-                    if (std::strcmp(reinterpret_cast<const char*>(extension), "GL_ARB_gpu_shader_fp64") == 0) {
-                        hasDoublePrecision = true;
-                        break;
-                    }
-                }
-                
-                if (!hasDoublePrecision) {
-                    throw std::runtime_error("Double precision not supported by GPU");
-                }
-            }
-        
-            // Load appropriate shader version
-            if (computeProgram == 0) {
-                if constexpr (std::is_same_v<T, float>) {
-                    computeProgram = loadComputeShader("include/matmul_float.comp");
-                } else {
-                    computeProgram = loadComputeShader("include/matmul_double.comp");
-                }
-            }
-        
-            matrix<T> result(a.row, b.col);
-            
-            // Create buffers
-            GLuint buffers[3];
-            glGenBuffers(3, buffers);
-            
-            // Matrix A buffer
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
-            glBufferData(GL_SHADER_STORAGE_BUFFER, a.row * a.col * sizeof(T), a.data, GL_STATIC_DRAW);
-            
-            // Matrix B buffer
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[1]);
-            glBufferData(GL_SHADER_STORAGE_BUFFER, b.row * b.col * sizeof(T), b.data, GL_STATIC_DRAW);
-            
-            // Result buffer
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[2]);
-            glBufferData(GL_SHADER_STORAGE_BUFFER, result.row * result.col * sizeof(T), nullptr, GL_DYNAMIC_COPY);
-            
-            // Bind compute shader and set uniforms
-            glUseProgram(computeProgram);
-            glUniform1i(glGetUniformLocation(computeProgram, "width"), b.col);
-            glUniform1i(glGetUniformLocation(computeProgram, "height"), a.row);
-            glUniform1i(glGetUniformLocation(computeProgram, "depth"), a.col);
-            
-            // Bind storage buffers
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffers[0]);
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, buffers[1]);
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, buffers[2]);
-            
-            // Calculate optimal dispatch size
-            const int WORK_GROUP_SIZE = 32;
-            int num_groups_x = (b.col + WORK_GROUP_SIZE - 1) / WORK_GROUP_SIZE;
-            int num_groups_y = (a.row + WORK_GROUP_SIZE - 1) / WORK_GROUP_SIZE;
-            
-            // Dispatch compute shader
-            glDispatchCompute(num_groups_x, num_groups_y, 1);
-            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-            
-            // Read back results
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[2]);
-            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, 
-                              result.row * result.col * sizeof(T), 
-                              result.data);
-            
-            // Cleanup
-            glDeleteBuffers(3, buffers);
-            
-            return result;
-        };
-        
     public: //these will be the math operator functions and accessor functions
         
         inline void set_diag(T c);
@@ -418,46 +339,25 @@ class matrix {
         
             const size_t total_elements = a.row * b.col;
             const size_t total_operations = total_elements * a.col;
-        
-            // Check if GPU is available and initialized
-            static bool gpu_available = false;
-            static bool first_check = true;
-        
-            if (first_check) {
-                try {
-                    if (initGL()) {
-                        // Try to load and compile shaders
-                        if constexpr (std::is_same_v<T, float>) {
-                            computeProgram = loadComputeShader("include/matmul_float.comp");
-                        } else {
-                            computeProgram = loadComputeShader("include/matmul_double.comp");
-                        }
-                        gpu_available = true;
-                    }
-                } catch (const std::runtime_error& e) {
-                    std::cerr << "GPU initialization failed, using CPU-only mode: " << e.what() << std::endl;
-                    gpu_available = false;
-                    GPU_SIZE_THRESHOLD = std::numeric_limits<int>::max(); // Disable GPU path
+            
+            // Use GPU acceleration if available
+            #ifdef GPU_ACCELERATION_ENABLED
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    return GPUVecAdapter::multiply(a, b);
                 }
-                first_check = false;
+            } catch (const std::exception& e) {
+                // Fall back to CPU if GPU acceleration fails
+                std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
             }
-        
-            // Only try GPU path if we know it's available
-            if (gpu_available && total_operations >= GPU_SIZE_THRESHOLD * GPU_SIZE_THRESHOLD) {
-                try {
-                    return multiplyGPU(a, b);
-                } catch (const std::runtime_error& e) {
-                    std::cerr << "GPU multiplication failed, falling back to CPU: " << e.what() << std::endl;
-                    gpu_available = false; // Disable GPU for future multiplications
-                    GPU_SIZE_THRESHOLD = std::numeric_limits<int>::max();
-                }
-            }
-        
-            // CPU paths
+            #endif
+            
+            // Use multithreaded CPU implementation for larger matrices
             if (total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
                 return multiplyThreaded(a, b);
             }
-        
+            
+            // Use sequential implementation for smaller matrices
             return multiplySequential(a, b);
         };
         inline friend matrix<T> operator*(matrix<T> a, T b){matrix<T>temp(a); temp*=b;return temp;};
@@ -500,7 +400,6 @@ matrix<T>::matrix(int n, int m){
     }
     data = new T[n*m];
     std::memset(data, 0 , sizeof(T)*n*m);
-    //data = (T*)std::calloc(n*m,sizeof(T));
     row = n;
     col = m;
 }
@@ -534,7 +433,7 @@ inline matrix<T>::matrix(vecs<T> &vectors, bool row_major){
 
 template <typename T>
 matrix<T>::matrix(const matrix<T> &other){
-    data = new T[other.row*other.col];//suposed deepcopy
+    data = new T[other.row*other.col];
     std::memcpy(data, other.data, sizeof(T)*other.col*other.row);
     row = other.row;
     col = other.col;
@@ -616,21 +515,9 @@ inline void matrix<T>::printout()
 template <typename T>
 inline matrix<T>::~matrix() {
     delete[] data;
+    data = nullptr;
     row = 0;
     col = 0;
-    
-    if (glInitialized) {
-        if (window) {
-            glfwDestroyWindow(window);
-            window = nullptr;
-        }
-        if (computeProgram) {
-            glDeleteProgram(computeProgram);
-            computeProgram = 0;
-        }
-        glfwTerminate();
-        glInitialized = false;
-    }
 }
 
 template <typename T>
@@ -687,21 +574,35 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
         std::cout << "Error: matrix is empty\n";
         exit(0);
     }
-    if (b.size != this->col) { // Ensure the matrix columns match the vector size
+    if (b.size != this->col) {
         std::cout << "Error: Tried to multiply a matrix of size " << this->row << "x" << this->col
                   << " with a vector of size " << b.size << "\n";
         exit(0);
     }
 
-    vec<T> temp(this->row); // Output vector should have the same number of rows as the matrix
+    // Use GPU acceleration if available
+    #ifdef GPU_ACCELERATION_ENABLED
+    try {
+        if constexpr (std::is_same_v<T, float>) {
+            return GPUVecAdapter::multiply(*this, b);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
+    }
+    #endif
+
+    // CPU implementation as fallback
+    vec<T> temp(this->row);
     T sum = 0;
 
-    for (int i = 0; i < this->row; i++) {  // Loop over matrix rows
+    // Use cache-friendly loop ordering and vectorization hints
+    #pragma omp parallel for simd
+    for (int i = 0; i < this->row; i++) {
         sum = 0;
-        for (int j = 0; j < this->col; j++) {  // Loop over matrix columns
-            sum += this->data[(i * this->col) + j] * b(j);
+        for (int j = 0; j < this->col; j++) {
+            sum += this->data[(i * this->col) + j] * b.data[j];
         }
-        temp(i) = sum;
+        temp.data[i] = sum;
     }
     return temp;
 };
