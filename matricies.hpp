@@ -25,7 +25,7 @@ public:
     int size_col(){return size_m;};
     int size_row(){return size_n;};
 
-    inline matricies<T> back(){return mats[num_matricies-1];};
+    inline matrix<T> back(){return mats[num_matricies-1];};
     void printout();
     matricies<T> subset(int start_index, int end_index); // Subset function
 };

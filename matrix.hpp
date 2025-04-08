@@ -607,3 +607,13 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
     return temp;
 };
 
+template <typename T>
+inline matrix<T> outer_product(vec<T> a, vec<T> b){
+    matrix<T> result(a.size, b.size);
+    for(int i = 0; i < a.size; i++){
+        for(int j = 0; j < b.size; j++){
+            result(i, j) = a(i) * b(j);
+        }
+    }
+    return result;
+};
