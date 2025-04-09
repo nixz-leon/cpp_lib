@@ -2,35 +2,21 @@
 #ifndef vec_hpp
 #include "vec.hpp"
 #endif
-#ifndef vector
-#include <vector>
-#endif 
-#ifndef thread
-#include <thread>
-#endif 
-#ifndef glad
-#include <glad/glad.h>
-#endif
-#ifndef glfw3
-#include <GLFW/glfw3.h>
-#endif
-#ifndef windows
-#include <windows.h>
-#endif
-#ifndef sstream
-#include <sstream>
-#endif
+#include <iostream>
+#include <stdexcept>
+#include <algorithm>
+#include "HardwareAccelerator.hpp"
 
-// GPU acceleration check - include adapter if enabled
-#ifdef GPU_ACCELERATION_ENABLED
-#include "GPUVecAdapter.hpp"
-#endif
+// Define constants for hardware acceleration
+#define CACHE_BLOCK_SIZE HardwareAccelerator::getCacheBlockSize()
+#define THREAD_SIZE_THRESHOLD HardwareAccelerator::getThreadThreshold()
+#define GPU_SIZE_THRESHOLD HardwareAccelerator::getGPUThreshold()
 
 template <typename T>
 class matrix {  
-    public: //this are memory functions
-        matrix();//default 
-        matrix(int n, int m); //normal
+    public:
+        matrix() : data(nullptr), row(0), col(0) {} //default 
+        matrix(int n, int m) : row(n), col(m) {data = new T[row * col]();}; //normal
         matrix(vecs<T> &vectors, bool row_major = false);
         matrix(const matrix<T> &other);// copy
         matrix<T>& operator=(matrix<T>& other); //copy assigment
@@ -45,148 +31,6 @@ class matrix {
         T *data; // Making public to allow GPU adapter direct access
 
     private:
-        static GLFWwindow* window;
-        static GLuint computeProgram;
-        static bool glInitialized;
-        static bool capabilities_detected;
-        static int GPU_SIZE_THRESHOLD;
-        static int THREAD_SIZE_THRESHOLD;
-        static int CACHE_BLOCK_SIZE;
-
-        static bool initGL() {
-            try {
-                if (!glfwInit()) {
-                    return false;
-                }
-                
-                glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-                glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-                
-                window = glfwCreateWindow(1, 1, "Compute", nullptr, nullptr);
-                if (!window) {
-                    glfwTerminate();
-                    return false;
-                }
-                
-                glfwMakeContextCurrent(window);
-                
-                if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-                    glfwDestroyWindow(window);
-                    glfwTerminate();
-                    return false;
-                }
-                
-                // Load compute shader
-                try {
-                    if constexpr (std::is_same_v<T, float>) {
-                        computeProgram = loadComputeShader("include/shaders/matmul_float.comp");
-                    } else {
-                        computeProgram = loadComputeShader("include/shaders/matmul_double.comp");
-                    }
-                    glInitialized = true;
-                    return true;
-                } catch (const std::runtime_error& e) {
-                    glfwDestroyWindow(window);
-                    glfwTerminate();
-                    return false;
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "GL initialization failed: " << e.what() << std::endl;
-                return false;
-            }
-        };
-        
-        static GLuint loadComputeShader(const char* filepath) {
-            std::ifstream file(filepath);
-            if (!file.is_open()) {
-                throw std::runtime_error("Failed to open compute shader file");
-            }
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            std::string shader_source = buffer.str();
-            const char* sourcePtr = shader_source.c_str();
-    
-            GLuint computeShader = glCreateShader(GL_COMPUTE_SHADER);
-            glShaderSource(computeShader, 1, &sourcePtr, nullptr);
-            glCompileShader(computeShader);
-    
-            GLint success;
-            glGetShaderiv(computeShader, GL_COMPILE_STATUS, &success);
-            if (!success) {
-                GLchar infoLog[512];
-                glGetShaderInfoLog(computeShader, 512, nullptr, infoLog);
-                throw std::runtime_error(std::string("Shader compilation failed: ") + infoLog);
-            }
-    
-            GLuint program = glCreateProgram();
-            glAttachShader(program, computeShader);
-            glLinkProgram(program);
-    
-            glGetProgramiv(program, GL_LINK_STATUS, &success);
-            if (!success) {
-                GLchar infoLog[512];
-                glGetProgramInfoLog(program, 512, nullptr, infoLog);
-                throw std::runtime_error(std::string("Program linking failed: ") + infoLog);
-            }
-    
-            glDeleteShader(computeShader);
-            return program;
-        };
-        
-        static void detectHardwareCapabilities() {
-            // GPU capabilities
-            if (glInitialized || initGL()) {
-                GLint maxWorkGroupSize[3];
-                GLint maxMemorySize;
-                
-                glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxWorkGroupSize[0]);
-                glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxMemorySize);
-                
-                // Calculate GPU threshold based on work group size and memory
-                int maxGPUMatrixDim = std::min(
-                    static_cast<int>(sqrt(maxMemorySize / sizeof(T))),
-                    maxWorkGroupSize[0] * 32  // Assuming 32 work groups is optimal
-                );
-                GPU_SIZE_THRESHOLD = std::max(256, maxGPUMatrixDim);
-            } else {
-                // If GPU not available, set threshold to maximum to disable GPU path
-                GPU_SIZE_THRESHOLD = std::numeric_limits<int>::max();
-            }
-
-            // CPU capabilities
-            SYSTEM_INFO sysInfo;
-            GetSystemInfo(&sysInfo);
-            
-            // Get number of CPU cores
-            unsigned int numCores = sysInfo.dwNumberOfProcessors;
-            
-            // Get L1 cache size
-            DWORD bufferSize = 0;
-            GetLogicalProcessorInformation(nullptr, &bufferSize);
-            std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> buffer(bufferSize / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
-            GetLogicalProcessorInformation(buffer.data(), &bufferSize);
-            
-            size_t l1CacheSize = 32 * 1024; // Default 32KB if detection fails
-            for (const auto& info : buffer) {
-                if (info.Relationship == RelationCache && 
-                    info.Cache.Level == 1 &&
-                    info.Cache.Type == CacheData) {
-                    l1CacheSize = info.Cache.Size;
-                    break;
-                }
-            }
-            
-            // Set cache block size based on L1 cache
-            CACHE_BLOCK_SIZE = static_cast<int>(sqrt(l1CacheSize / (2 * sizeof(T))));
-            CACHE_BLOCK_SIZE = std::min(64, std::max(16, CACHE_BLOCK_SIZE));
-            
-            // Set thread threshold based on number of cores
-            THREAD_SIZE_THRESHOLD = static_cast<int>(sqrt(l1CacheSize / sizeof(T)) * numCores);
-            THREAD_SIZE_THRESHOLD = std::max(128, std::min(512, THREAD_SIZE_THRESHOLD));
-        };
-
         static inline matrix<T> multiplySequential(const matrix<T>& a, const matrix<T>& b) {
             matrix<T> result(a.row, b.col);
             const int block = CACHE_BLOCK_SIZE;
@@ -293,8 +137,7 @@ class matrix {
             return result;
         };
 
-    public: //these will be the math operator functions and accessor functions
-        
+    public:
         inline void set_diag(T c);
         inline void row_swap(int a, int b);
         inline void row_add(int a, int b, T fac); 
@@ -340,15 +183,24 @@ class matrix {
             const size_t total_elements = a.row * b.col;
             const size_t total_operations = total_elements * a.col;
             
-            // Use GPU acceleration if available
-            #ifdef GPU_ACCELERATION_ENABLED
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    return GPUVecAdapter::multiply(a, b);
+                    matrix<T> result(a.row, b.col);
+                    bool success = HardwareAccelerator::multiplyMatrices(
+                        a.data, a.row, a.col,
+                        b.data, b.row, b.col,
+                        result.data
+                    );
+                    
+                    if (success) {
+                        return result;
+                    }
                 }
             } catch (const std::exception& e) {
-                // Fall back to CPU if GPU acceleration fails
-                std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
             }
             #endif
             
@@ -371,45 +223,60 @@ class matrix {
             }
             return sum;
         };
+
+        inline void multiply(const matrix<T>& other, matrix<T>& result) const {
+            if (col != other.row || result.row != row || result.col != other.col) {
+                throw std::invalid_argument("Matrix dimensions don't match for multiplication");
+            }
+
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    bool success = HardwareAccelerator::multiplyMatrices(
+                        data, row, col,
+                        other.data, other.row, other.col,
+                        result.data
+                    );
+                    
+                    if (success) {
+                        return;
+                    }
+                }
+            } catch (const std::exception& e) {
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+            }
+            #endif
+
+            const int block = CACHE_BLOCK_SIZE;
+            
+            // Use cache-friendly blocking
+            for (int i = 0; i < row; i += block) {
+                for (int k = 0; k < col; k += block) {
+                    for (int j = 0; j < other.col; j += block) {
+                        // Block multiplication
+                        for (int ii = i; ii < std::min(i + block, row); ++ii) {
+                            for (int kk = k; kk < std::min(k + block, col); ++kk) {
+                                T r = data[ii * col + kk];
+                                for (int jj = j; jj < std::min(j + block, other.col); ++jj) {
+                                    result.data[ii * other.col + jj] += r * other.data[kk * other.col + jj];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // For parallel operations
+        inline bool shouldUseThreads() const {
+            return (row * col) >= THREAD_SIZE_THRESHOLD;
+        }
 };
 
-template <typename T> GLFWwindow* matrix<T>::window = nullptr;
-template <typename T> GLuint matrix<T>::computeProgram = 0;
-template <typename T> bool matrix<T>::glInitialized = false;
-template <typename T> bool matrix<T>::capabilities_detected = false;
-template <typename T> int matrix<T>::GPU_SIZE_THRESHOLD = 512;
-template <typename T> int matrix<T>::THREAD_SIZE_THRESHOLD = 128;
-template <typename T> int matrix<T>::CACHE_BLOCK_SIZE = 32;
-
 template <typename T>
-matrix<T>::matrix(){
-    if (!capabilities_detected) {
-        detectHardwareCapabilities();
-        capabilities_detected = true;
-    }
-    data = nullptr;
-    row = 0;
-    col = 0;
-}
-
-template <typename T>
-matrix<T>::matrix(int n, int m){
-    if (!capabilities_detected) {
-        detectHardwareCapabilities();
-        capabilities_detected = true;
-    }
-    data = new T[n*m];
-    std::memset(data, 0 , sizeof(T)*n*m);
-    row = n;
-    col = m;
-}
-
-template <typename T>
-inline matrix<T>::matrix(vecs<T> &vectors, bool row_major){
-    if (!capabilities_detected) {
-        detectHardwareCapabilities();
-        capabilities_detected = true;
-    }
+matrix<T>::matrix(vecs<T> &vectors, bool row_major){
     if(row_major){
         row = vectors.size();
         col = vectors.num_of_vecs();
@@ -514,10 +381,10 @@ inline void matrix<T>::printout()
 
 template <typename T>
 inline matrix<T>::~matrix() {
-    delete[] data;
-    data = nullptr;
-    row = 0;
-    col = 0;
+    if (data != nullptr) {
+        delete[] data;
+        data = nullptr;
+    }
 }
 
 template <typename T>
@@ -580,14 +447,23 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
         exit(0);
     }
 
-    // Use GPU acceleration if available
-    #ifdef GPU_ACCELERATION_ENABLED
+    // Use hardware acceleration if available
+    #ifdef HARDWARE_ACCELERATION_ENABLED
     try {
-        if constexpr (std::is_same_v<T, float>) {
-            return GPUVecAdapter::multiply(*this, b);
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+            vec<T> result(this->row);
+            bool success = HardwareAccelerator::multiplyMatrixVector(
+                this->data, this->row, this->col,
+                b.data, result.data
+            );
+            
+            if (success) {
+                return result;
+            }
         }
     } catch (const std::exception& e) {
-        std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
+        // Fall back to CPU if hardware acceleration fails
+        std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
     }
     #endif
 

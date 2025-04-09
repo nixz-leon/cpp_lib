@@ -45,34 +45,33 @@ matricies<T>::matricies(int num_mats, int n, int m) : num_matricies(num_mats), s
 }
 //copy constructor
 template <class T>
-inline matricies<T>::matricies(const matricies<T> &other) : num_matricies(other.num_matricies), size_n(other.size_n), size_m(other.size_m){
-    mats = (matrix<T>*)std::calloc(num_matricies, sizeof(other.mats[0]));
-    for(int i =0; i < num_matricies; ++i){
+inline matricies<T>::matricies(const matricies<T> &other) 
+    : num_matricies(other.num_matricies), size_n(other.size_n), size_m(other.size_m) {
+    mats = new matrix<T>[num_matricies];  // Use new[] instead of calloc
+    for(int i = 0; i < num_matricies; ++i) {
         mats[i] = other.mats[i];
     }
-
-};
+}
 //copy assignment
 template <class T>
-matricies<T>& matricies<T>::operator=(const matricies<T>& other){
-    if(this != &other){
-        if(mats != nullptr){
+matricies<T>& matricies<T>::operator=(const matricies<T>& other) {
+    if(this != &other) {
+        matrix<T>* new_mats = new matrix<T>[other.num_matricies];
+        for(int i = 0; i < other.num_matricies; ++i) {
+            new_mats[i] = other.mats[i];
+        }
+        
+        if(mats != nullptr) {
             delete[] mats;
         }
+        
+        mats = new_mats;
         num_matricies = other.num_matricies;
         size_n = other.size_n;
         size_m = other.size_m;
-        mats = (matrix<T>*)std::calloc(num_matricies, sizeof(other.mats[0]));
-        if(!mats){
-            throw std::runtime_error("Memory allocation failed");
-        }
-        for(int i = 0; i < num_matricies; ++i){
-            mats[i] = other.mats[i];
-        }
     }
     return *this;
-
-};
+}
 //move constructor
 template <class T>
 inline matricies<T>::matricies(matricies<T> &&other) noexcept : mats(other.mats), size_n(other.size_n), size_m(other.size_m), num_matricies(other.num_matricies) {
@@ -84,14 +83,10 @@ inline matricies<T>::matricies(matricies<T> &&other) noexcept : mats(other.mats)
 
 //move assignment
 template <class T>
-matricies<T>& matricies<T>::operator=(matricies<T>&& other) noexcept{
-    if(this != &other){
-        if(mats != nullptr){
-            for(int i =0; i < num_matricies; ++i){
-                mats[i].~matrix();
-            }
-            std::free(mats);
-            mats = nullptr;
+matricies<T>& matricies<T>::operator=(matricies<T>&& other) noexcept {
+    if(this != &other) {
+        if(mats != nullptr) {
+            delete[] mats;  // Use delete[] instead of free
         }
         mats = other.mats;
         num_matricies = other.num_matricies;
@@ -105,12 +100,9 @@ matricies<T>& matricies<T>::operator=(matricies<T>&& other) noexcept{
     return *this;
 }
 template <class T>
-inline matricies<T>::~matricies(){
-    if(mats != nullptr){
-        for(int i =0; i < num_matricies; ++i){
-            mats[i].~matrix();
-        }
-        std::free(mats);
+inline matricies<T>::~matricies() {
+    if(mats != nullptr) {
+        delete[] mats;  // Use delete[] instead of free
         mats = nullptr;
     }
 }

@@ -23,14 +23,16 @@
 #ifndef functional
 #include <functional>
 #endif
-#ifndef  random
+#ifndef random
 #include <random>
 #endif
-
-// GPU acceleration check - include adapter if enabled
-#ifdef GPU_ACCELERATION_ENABLED
-#include "GPUVecAdapter.hpp"
+#ifndef thread
+#include <thread>
 #endif
+
+// Include HardwareAccelerator header
+#include "HardwareAccelerator.hpp"
+
 
 // Forward declaration of FFT function used in the vec class
 extern "C" void fftr1(double*, int, int);
@@ -50,209 +52,295 @@ struct _init_list_with_square_brackets {
 
 template <typename T>
 class vec {
-    public: // Memory management functions
-        vec();
-        vec(const int size);
-        vec(const vec<T> &other);
-        vec<T>& operator=(const vec<T> &other);
-        vec(vec<T> &&other) noexcept;
-        vec<T>& operator=(vec<T> &&other) noexcept;
-        vec<T> operator=(_init_list_with_square_brackets<T> other);
+    public:
+        vec() : data(nullptr), size(0) {} //default
+        vec(int n) : size(n) {data = new T[size]();}; //normal
+        vec(const vec<T> &other);// copy
+        vec<T>& operator=(vec<T>& other); //copy assigment
+        vec(vec<T> &&other) noexcept;//move
+        vec<T>& operator=(vec<T>&& other) noexcept;// move assignment 
         T& operator()(int i);
-        const T& operator()(int i) const;
+        const T& operator()(int i)const;
         void printout();
-        inline void fft();
-        inline void ifft();
-        inline const T back();
         ~vec();
-        T *data; // Making public to allow GPU adapter direct access
         int size;
-        T max() const;
+        T *data; // Making public to allow GPU adapter direct access
 
-    public: // Mathematical operations and utility functions
-        // Vector operations
-        inline vec<T> operator+=(const vec<T> &other);
-        inline vec<T> operator-=(const vec<T> &other);
-        inline vec<T> operator*=(T c);
-        inline vec<T> operator/=(T c);
-        inline vec<T> operator++();
-        inline void row_swap(int a, int b);
-        inline void row_add(int a, int b, T fac);
-        inline T sum();
-        inline void set(T num);
-        
-        // Vector-vector operations with GPU acceleration where available
-        inline friend vec<T> operator+(vec<T> a, const vec<T> &b) {
-            if (a.size != b.size) {
-                std::cout << "Error: Tried to add vectors of different sizes: " 
-                          << a.size << " and " << b.size << "\n";
-                exit(0);
-            }
-            
-            #ifdef GPU_ACCELERATION_ENABLED
-            try {
-                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    // Use GPU for larger vectors
-                    if (a.size >= 100000) {
-                        return GPUVecAdapter::add(a, b);
-                    }
-                }
-            } catch (const std::exception& e) {
-                // Fall back to CPU if GPU acceleration fails
-                std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
-            }
-            #endif
-            
-            // CPU implementation as fallback
-            vec<T> temp(a.size);
+    private:
+        static inline vec<T> addSequential(const vec<T>& a, const vec<T>& b) {
+            vec<T> result(a.size);
             #pragma omp simd
             for (int i = 0; i < a.size; i++) {
-                temp(i) = a(i) + b(i);
+                result.data[i] = a.data[i] + b.data[i];
             }
-            return temp;
+            return result;
         }
-        
-        inline friend vec<T> operator-(vec<T> a, const vec<T> &b) {
-            if (a.size != b.size) {
-                std::cout << "Error: Tried to subtract vectors of different sizes: " 
-                          << a.size << " and " << b.size << "\n";
-                exit(0);
+
+        static inline vec<T> addThreaded(const vec<T>& a, const vec<T>& b) {
+            vec<T> result(a.size);
+            const int block = HardwareAccelerator::getCacheBlockSize();
+            
+            // Calculate optimal number of threads based on CPU cores and vector size
+            int num_threads = std::min(
+                static_cast<int>(std::thread::hardware_concurrency()),
+                (a.size + block - 1) / block
+            );
+            
+            std::vector<std::thread> threads;
+            threads.reserve(num_threads);
+            
+            auto add_block = [&](int start_idx, int end_idx) {
+                #pragma omp simd
+                for (int i = start_idx; i < end_idx; i++) {
+                    result.data[i] = a.data[i] + b.data[i];
+                }
+            };
+            
+            // Distribute work among threads
+            const int elements_per_thread = (a.size + num_threads - 1) / num_threads;
+            
+            for (int t = 0; t < num_threads; ++t) {
+                const int start_idx = t * elements_per_thread;
+                const int end_idx = std::min(start_idx + elements_per_thread, a.size);
+                if (start_idx < end_idx) {
+                    threads.emplace_back(add_block, start_idx, end_idx);
+                }
             }
             
-            vec<T> temp(a.size);
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            
+            return result;
+        }
+
+        static inline vec<T> subtractSequential(const vec<T>& a, const vec<T>& b) {
+            vec<T> result(a.size);
+            #pragma omp simd
             for (int i = 0; i < a.size; i++) {
-                temp(i) = a(i) - b(i);
+                result.data[i] = a.data[i] - b.data[i];
             }
-            return temp;
+            return result;
         }
-        
-        // Dot product with GPU acceleration
-        inline friend T operator*(const vec<T> &a, const vec<T> &b) {
-            if (a.size != b.size) {
-                std::cout << "Error: Tried to multiply a vector of size " << b.size 
-                          << " with a vector of size " << a.size << "\n";
-                exit(0);
+
+        static inline vec<T> subtractThreaded(const vec<T>& a, const vec<T>& b) {
+            vec<T> result(a.size);
+            const int block = HardwareAccelerator::getCacheBlockSize();
+            
+            // Calculate optimal number of threads based on CPU cores and vector size
+            int num_threads = std::min(
+                static_cast<int>(std::thread::hardware_concurrency()),
+                (a.size + block - 1) / block
+            );
+            
+            std::vector<std::thread> threads;
+            threads.reserve(num_threads);
+            
+            auto subtract_block = [&](int start_idx, int end_idx) {
+                #pragma omp simd
+                for (int i = start_idx; i < end_idx; i++) {
+                    result.data[i] = a.data[i] - b.data[i];
+                }
+            };
+            
+            // Distribute work among threads
+            const int elements_per_thread = (a.size + num_threads - 1) / num_threads;
+            
+            for (int t = 0; t < num_threads; ++t) {
+                const int start_idx = t * elements_per_thread;
+                const int end_idx = std::min(start_idx + elements_per_thread, a.size);
+                if (start_idx < end_idx) {
+                    threads.emplace_back(subtract_block, start_idx, end_idx);
+                }
             }
             
-            #ifdef GPU_ACCELERATION_ENABLED
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            
+            return result;
+        }
+
+    public:
+        inline friend vec<T> operator+(const vec<T>& a, const vec<T>& b) {
+            if (a.data == nullptr || b.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
+                exit(0);
+            }
+            if (a.size != b.size) {
+                std::cout << "Error: Tried to add a vector of size " << a.size
+                          << " with a vector of size " << b.size << "\n";
+                exit(0);
+            }
+
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    // Use GPU for larger vectors
-                    if (a.size >= 100000) {
-                        return GPUVecAdapter::dotProduct(a, b);
+                    vec<T> result(a.size);
+                    bool success = HardwareAccelerator::addVectors(
+                        a.data, b.data, result.data, a.size
+                    );
+                    
+                    if (success) {
+                        return result;
                     }
                 }
             } catch (const std::exception& e) {
-                // Fall back to CPU if GPU acceleration fails
-                std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
             }
             #endif
+
+            // Use multithreaded CPU implementation for larger vectors
+            if (a.size >= HardwareAccelerator::getThreadThreshold()) {
+                return addThreaded(a, b);
+            }
             
-            // CPU implementation with optimizations
-            T sum = 0;
+            // Use sequential implementation for smaller vectors
+            return addSequential(a, b);
+        }
+
+        inline friend vec<T> operator-(const vec<T>& a, const vec<T>& b) {
+            if (a.data == nullptr || b.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
+                exit(0);
+            }
+            if (a.size != b.size) {
+                std::cout << "Error: Tried to subtract a vector of size " << a.size
+                          << " with a vector of size " << b.size << "\n";
+                exit(0);
+            }
+
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    vec<T> result(a.size);
+                    vec<T> negated_b(b.size);
+                    
+                    // Negate b and then add
+                    #pragma omp simd
+                    for (int i = 0; i < b.size; i++) {
+                        negated_b.data[i] = -b.data[i];
+                    }
+                    
+                    bool success = HardwareAccelerator::addVectors(
+                        a.data, negated_b.data, result.data, a.size
+                    );
+                    
+                    if (success) {
+                        return result;
+                    }
+                }
+            } catch (const std::exception& e) {
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+            }
+            #endif
+
+            // Use multithreaded CPU implementation for larger vectors
+            if (a.size >= HardwareAccelerator::getThreadThreshold()) {
+                return subtractThreaded(a, b);
+            }
             
-            // Use SIMD instructions via compiler hints
-            #pragma omp simd reduction(+:sum)
+            // Use sequential implementation for smaller vectors
+            return subtractSequential(a, b);
+        }
+
+        inline friend vec<T> operator*(const vec<T>& a, T b) {
+            vec<T> result(a.size);
+            #pragma omp simd
             for (int i = 0; i < a.size; i++) {
-                sum += a(i) * b(i);
+                result.data[i] = a.data[i] * b;
+            }
+            return result;
+        }
+
+        inline friend vec<T> operator*(T a, const vec<T>& b) {
+            return b * a;
+        }
+
+        inline friend T operator*(const vec<T>& a, const vec<T>& b) {
+            if (a.data == nullptr || b.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
+                exit(0);
+            }
+            if (a.size != b.size) {
+                std::cout << "Error: Tried to multiply a vector of size " << a.size
+                          << " with a vector of size " << b.size << "\n";
+                exit(0);
+            }
+
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    T result = 0;
+                    bool success = HardwareAccelerator::dotProduct(
+                        a.data, b.data, a.size, result
+                    );
+                    
+                    if (success) {
+                        return result;
+                    }
+                }
+            } catch (const std::exception& e) {
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+            }
+            #endif
+
+            // CPU implementation as fallback
+            T sum = 0;
+            #pragma omp parallel for simd reduction(+:sum)
+            for (int i = 0; i < a.size; i++) {
+                sum += a.data[i] * b.data[i];
             }
             return sum;
         }
-        
-        // Element-wise multiplication
-        inline friend vec<T> element_mult(const vec<T> &a, const vec<T> &b) {
-            if (a.size != b.size) {
-                std::cout << "Error: Tried element-wise multiplication of vectors with different sizes: " 
-                          << a.size << " and " << b.size << "\n";
+
+        inline friend vec<T> element_mult(const vec<T>& a, const vec<T>& b) {
+            if (a.data == nullptr || b.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
                 exit(0);
             }
-            
-            #ifdef GPU_ACCELERATION_ENABLED
+            if (a.size != b.size) {
+                std::cout << "Error: Tried to multiply a vector of size " << a.size
+                          << " with a vector of size " << b.size << "\n";
+                exit(0);
+            }
+
+            // Use hardware acceleration if available
+            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    // Use GPU for larger vectors
-                    if (a.size >= 100000) {
-                        return GPUVecAdapter::elementMult(a, b);
+                    vec<T> result(a.size);
+                    bool success = HardwareAccelerator::multiplyVectors(
+                        a.data, b.data, result.data, a.size
+                    );
+                    
+                    if (success) {
+                        return result;
                     }
                 }
             } catch (const std::exception& e) {
-                // Fall back to CPU if GPU acceleration fails
-                std::cerr << "GPU acceleration failed, using CPU: " << e.what() << std::endl;
+                // Fall back to CPU if hardware acceleration fails
+                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
             }
             #endif
-            
-            // CPU implementation
-            vec<T> temp(a.size);
+
+            // CPU implementation as fallback
+            vec<T> result(a.size);
+            #pragma omp parallel for simd
             for (int i = 0; i < a.size; i++) {
-                temp(i) = a(i) * b(i);
+                result.data[i] = a.data[i] * b.data[i];
             }
-            return temp;
-        }
-        
-        // Scalar operations
-        inline friend vec<T> operator*(vec<T> a, T b) {
-            vec<T> temp(a);
-            temp *= b;
-            return temp;
-        }
-        
-        inline friend vec<T> operator*(T a, vec<T> b) {
-            vec<T> temp(b);
-            temp *= a;
-            return temp;
-        }
-        
-        inline friend vec<T> operator/(vec<T> a, T b) {
-            vec<T> temp(a);
-            temp /= b;
-            return temp;
-        }
-        
-        // Comparison operators
-        inline friend bool operator==(vec<T> a, vec<T> b) {
-            if (a.size != b.size) {
-                return false;
-            }
-            for (int i = 0; i < b.size; i++) {
-                if (a(i) != b(i)) return false;
-            }
-            return true;
-        }
-        
-        inline friend bool operator!=(vec<T> a, vec<T> b) {
-            if (a.size != b.size) {
-                return true;
-            }
-            for (int i = 0; i < b.size; i++) {
-                if (a(i) != b(i)) return true;
-            }
-            return false;
-        }
-        
-        // Fill vector with random values
-        inline void randomize(T min = -1.0, T max = 1.0) {
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_real_distribution<T> dis(min, max);
-            
-            for (int i = 0; i < size; i++) {
-                data[i] = dis(gen);
-            }
+            return result;
         }
 };
-
-template <typename T>
-vec<T>::vec() {
-    data = nullptr;
-    size = 0;
-}
-
-template <typename T>
-vec<T>::vec(const int s) {
-    data = new T[s];
-    std::memset(data, 0, sizeof(T) * s);
-    size = s;
-}
 
 template <typename T>
 vec<T>::vec(const vec<T> &other) {
@@ -262,7 +350,7 @@ vec<T>::vec(const vec<T> &other) {
 }
 
 template <typename T>
-vec<T> &vec<T>::operator=(const vec<T> &other) {
+vec<T> &vec<T>::operator=(vec<T>& other) {
     if (this != &other) {
         delete[] data;
         data = new T[other.size];
@@ -281,22 +369,13 @@ vec<T>::vec(vec<T> &&other) noexcept : size(0), data(nullptr) {
 }
 
 template <typename T>
-vec<T> &vec<T>::operator=(vec<T> &&other) noexcept {
+vec<T> &vec<T>::operator=(vec<T>&& other) noexcept {
     if (this != &other) {
         delete[] data;
         data = other.data;
         size = other.size;
         other.data = nullptr;
         other.size = 0;
-    }
-    return *this;
-}
-
-template <typename T>
-vec<T> vec<T>::operator=(_init_list_with_square_brackets<T> other) {
-    this->size = other.size();
-    for (int i = 0; i < other.size(); i++) {
-        this->data[i] = other[i];
     }
     return *this;
 }
@@ -343,149 +422,10 @@ void vec<T>::printout() {
 }
 
 template <typename T>
-inline void vec<T>::fft() {
-    fftr1(this->data, this->size, 1);
-}
-
-template <typename T>
-inline void vec<T>::ifft() {
-    fftr1(this->data, this->size, -1);
-}
-
-template <typename T>
-inline const T vec<T>::back() {
-    return data[size-1];
-}
-
-template <typename T>
 vec<T>::~vec() {
     delete[] data;
     data = nullptr;
     size = 0;
-}
-
-template <typename T>
-inline vec<T> vec<T>::operator+=(const vec<T> &other) {
-    if (size != other.size) {
-        std::cout << "Error: Tried to add vectors of different sizes\n";
-        exit(0);
-    }
-    
-    #pragma omp simd
-    for (int i = 0; i < size; i++) {
-        data[i] += other(i);
-    }
-    return *this;
-}
-
-template <typename T>
-inline vec<T> vec<T>::operator-=(const vec<T> &other) {
-    if (size != other.size) {
-        std::cout << "Error: Tried to subtract vectors of different sizes\n";
-        exit(0);
-    }
-    
-    #pragma omp simd
-    for (int i = 0; i < size; i++) {
-        data[i] -= other(i);
-    }
-    return *this;
-}
-
-template <typename T>
-inline vec<T> vec<T>::operator*=(T c) {
-    #pragma omp simd
-    for (int i = 0; i < size; i++) {
-        data[i] *= c;
-    }
-    return *this;
-}
-
-template <typename T>
-inline vec<T> vec<T>::operator/=(T c) {
-    if (c == 0) {
-        std::cout << "Error: Division by zero\n";
-        exit(0);
-    }
-    
-    T inv = 1.0 / c;
-    #pragma omp simd
-    for (int i = 0; i < size; i++) {
-        data[i] *= inv;  // Multiply by inverse is faster than division
-    }
-    return *this;
-}
-
-template <typename T>
-inline vec<T> vec<T>::operator++() {
-    for (int i = 0; i < this->size; i++) {
-        this->data[i]++;
-    }
-    return *this;
-}
-
-template <typename T>
-inline void vec<T>::row_swap(int a, int b) {
-    if (a > size-1) {
-        std::cout << "Tried to access elm " << a << ", But size is " << size-1 << '\n';
-        exit(0);
-    }
-    if (b > size-1) {
-        std::cout << "Tried to access elm " << b << ", But size is " << size-1 << '\n';
-        exit(0);
-    }
-    if (a == b) {
-        return;
-    }
-    T temp = data[a];
-    data[a] = data[b];
-    data[b] = temp;
-}
-
-template <typename T>
-inline void vec<T>::row_add(int a, int b, T fac) {
-    if (a > size-1) {
-        std::cout << "Tried to access elm " << a << ", But size is " << size-1 << '\n';
-        exit(0);
-    }
-    if (b > size-1) {
-        std::cout << "Tried to access elm " << b << ", But size is " << size-1 << '\n';
-        exit(0);
-    }
-    if (a == b) {
-        return;
-    }
-    data[a] += fac * data[b];
-}
-
-template <typename T>
-inline T vec<T>::sum() {
-    T sum = data[0];
-    for (int i = 1; i < size; i++) {
-        sum += data[i];
-    }
-    return sum;
-}
-
-template <typename T>
-inline void vec<T>::set(T num) {
-    for (int i = 0; i < size; i++) {
-        data[i] = num;
-    }
-}
-
-template <typename T>
-T vec<T>::max() const {
-    if (size == 0) {
-        throw std::runtime_error("Cannot find max of an empty vector");
-    }
-    T max_value = data[0];
-    for (int i = 1; i < size; i++) {
-        if (data[i] > max_value) {
-            max_value = data[i];
-        }
-    }
-    return max_value;
 }
 
 // Container class for multiple vectors
@@ -508,7 +448,7 @@ public:
     const vec<T>& operator()(int index) const;
     int num_of_vecs() { return num_vecs; };
     int size() { return size_of_vecs; };
-    inline vec<T> back() { return vectors[num_vecs-1]; };
+    inline vec<T>& back() { return vectors[num_vecs-1]; };
     void printout();
     vecs<T> subset(int start_col, int end_col); // Subset function
 };
@@ -565,7 +505,9 @@ vecs<T>::vecs(vecs<T>&& other) noexcept : vectors(other.vectors), num_vecs(other
 template <class T>
 vecs<T>& vecs<T>::operator=(vecs<T>&& other) noexcept {
     if (this != &other) {
-        delete[] vectors;  // Use delete[] instead of free
+        if (vectors != nullptr) {
+            delete[] vectors;
+        }
         vectors = other.vectors;
         num_vecs = other.num_vecs;
         size_of_vecs = other.size_of_vecs;
@@ -579,8 +521,10 @@ vecs<T>& vecs<T>::operator=(vecs<T>&& other) noexcept {
 // Destructor
 template <class T>
 vecs<T>::~vecs() {
-    delete[] vectors;  // Use delete[] instead of free
-    vectors = nullptr;
+    if (vectors != nullptr) {
+        delete[] vectors;
+        vectors = nullptr;
+    }
 }
 
 // Access operator
@@ -627,14 +571,6 @@ vecs<T> vecs<T>::subset(int start_index, int end_index) {
     return result;
 }
 
-template <class T>
-inline vec<T> per_elm(vec<T> a, vec<T> b){
-    vec<T> result(a.size);
-    for(int i =0; i < a.size; i++){
-        result(i) = a(i) * b(i);
-    } 
-    return result;
-};
 
 
 template <typename T>

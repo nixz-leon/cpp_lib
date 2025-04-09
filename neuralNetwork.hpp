@@ -28,8 +28,10 @@ class nn_double{
         int epochs;
         double learning_rate;
         bool softmax =true;
-        double act_func(double x){return x >0 ? x : 0;};
-        double act_deriv(double x){return x > 0 ? 1.0 : 0.0;};
+        double act_func(double x){return x > 0 ? x : 0;};
+        double act_deriv(double x){return x > 0 ? 1.0 : 0;};
+        //double act_func(double x){return x > 0 ? x : 0.01 * x;};
+        //double act_deriv(double x){return x > 0 ? 1.0 : 0.01;};
         //double act_func(double x){return 1.0 / (1.0 + exp(-x));};
         //double act_deriv(double x){return x * (1.0 - x);};
         vec<double> apply_act(vec<double> v){
@@ -66,14 +68,16 @@ class nn_double{
                 vec(i) = dist(gen);
             }
         }
-        nn_double(int input_dim, int output_dim, int hidden_layers_count,int nodes_per_layer, int num_epochs = 100, double lr = 0.01, bool softmax = true){
+        nn_double(int input_dim, int output_dim, int hidden_layers_count, 
+                  int nodes_per_layer, int num_epochs = 100, double lr = 0.01, 
+                  bool use_softmax = true) {
             input_size = input_dim;
             output_size = output_dim;
             hidden_layers = hidden_layers_count;
             per_layer = nodes_per_layer;
             epochs = num_epochs;
             learning_rate = lr;
-            softmax = softmax;
+            softmax = use_softmax;  // Fixed parameter shadowing
 
             in_weights = matrix<double>(per_layer, input_size);
             out_weights = matrix<double>(output_size, per_layer); 
@@ -84,6 +88,7 @@ class nn_double{
             in_layer_outputs = vec<double>(input_size);
             out_layer_outputs = vec<double>(output_dim);
 
+            // He initialization for ReLU variants
             double input_scale = std::sqrt(2.0 / input_size);
             double hidden_scale = std::sqrt(2.0 / per_layer);
             double output_scale = std::sqrt(2.0 / per_layer);
@@ -174,26 +179,22 @@ class nn_double{
                 std::cout << "Error: Number of inputs and targets must match" << std::endl;
                 return;
             }
-            
-            // Training loop
+            double reg_lambda = 0.0001;
             for (int epoch = 0; epoch < num_epochs; epoch++) {
                 double total_error = 0.0;
-                
-                // Process each sample
                 for (int i = 0; i < num_samples; i++) {
                     vec<double> output = forward_prop(inputs(i));
                     total_error += mse(output, targets(i));
                     back_prop(targets(i));
+                    if (hidden_layers > 0) {
+                        in_weights = in_weights * (1.0 - learning_rate * reg_lambda);
+                        for (int layer = 0; layer < hidden_layers-1; layer++) {
+                            weights(layer) = weights(layer) * (1.0 - learning_rate * reg_lambda);
+                        }
+                        out_weights = out_weights * (1.0 - learning_rate * reg_lambda); 
+                    }
                 }
-                
-                // Calculate average error for the epoch
-                double avg_error = total_error / num_samples;
-                
-                // Print progress every 10 epochs
-                /*
-                if (epoch % 10 == 0) {
-                    std::cout << "Epoch " << epoch << "/" << num_epochs << ", Error: " << avg_error << std::endl;
-                }*/
             }
         }
+        
 };
