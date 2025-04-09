@@ -15,7 +15,7 @@
 template <typename T>
 class matrix {  
     public:
-        matrix() : data(nullptr), row(0), col(0) {} //default 
+        matrix() : row(0), col(0), data(nullptr) {} //default 
         matrix(int n, int m) : row(n), col(m) {data = new T[row * col]();}; //normal
         matrix(vecs<T> &vectors, bool row_major = false);
         matrix(const matrix<T> &other);// copy

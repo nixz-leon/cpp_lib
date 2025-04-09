@@ -53,7 +53,7 @@ struct _init_list_with_square_brackets {
 template <typename T>
 class vec {
     public:
-        vec() : data(nullptr), size(0) {} //default
+        vec() : size(0),data(nullptr){} //default
         vec(int n) : size(n) {data = new T[size]();}; //normal
         vec(const vec<T> &other);// copy
         vec<T>& operator=(vec<T>& other); //copy assigment
