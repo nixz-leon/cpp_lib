@@ -1,6 +1,6 @@
 #pragma once
-#ifndef vec_hpp
-#include "vec.hpp"
+#ifndef vecs_hpp
+#include "vecs.hpp"
 #endif
 #include <iostream>
 #include <stdexcept>
