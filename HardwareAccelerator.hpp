@@ -49,6 +49,10 @@ private:
     static GLuint doubleMatMulProgram;
     static GLuint floatVecAddProgram;
     static GLuint floatVecMultProgram;
+    static GLuint floatVecDotProgram;
+    static GLuint doubleVecAddProgram;
+    static GLuint doubleVecMultProgram;
+    static GLuint doubleVecDotProgram;
     static bool glInitialized;
     static std::mutex gl_mutex;
     static std::atomic<bool> initialized;
@@ -263,6 +267,10 @@ public:
             
             if (hasDoubleSupport) {
                 doubleMatMulProgram = loadComputeShader("include/shaders/matmul_double.comp");
+                // Add double precision vector shaders
+                doubleVecAddProgram = loadComputeShader("include/shaders/vec_add_double.comp");
+                doubleVecMultProgram = loadComputeShader("include/shaders/vec_mult_double.comp");
+                doubleVecDotProgram = loadComputeShader("include/shaders/vec_dot_double.comp");
             }
             
             return true;
@@ -394,24 +402,26 @@ public:
 
     // Vector dot product with automatic hardware selection
     template<typename T>
-    static T dotProduct(const T* a, const T* b, int length) {
-        T sum = 0;
-        #pragma omp parallel for simd reduction(+:sum)
-        for (int i = 0; i < length; i++) {
-            sum += a[i] * b[i];
-        }
-        return sum;
-    }
-
-    template<typename T>
     static bool dotProduct(const T* a, const T* b, int length, T& result) {
-        try {
-            result = dotProduct(a, b, length);
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "Dot product failed: " << e.what() << std::endl;
-            return false;
+        // Determine operation size
+        int operation_size = length;
+        
+        // Try GPU if available and operation is large enough
+        if (isGPUAvailable() && shouldUseGPU(operation_size)) {
+            if constexpr (std::is_same_v<T, float>) {
+                return dotProductGPU(a, b, length, result);
+            } else if constexpr (std::is_same_v<T, double> && hasDoubleSupport) {
+                return dotProductGPU(a, b, length, result);
+            }
         }
+        
+        // Fall back to CPU implementation
+        result = 0;
+        #pragma omp parallel for simd reduction(+:result)
+        for (int i = 0; i < length; i++) {
+            result += a[i] * b[i];
+        }
+        return true;
     }
 
     // Vector addition with automatic hardware selection
@@ -423,6 +433,8 @@ public:
         // Try GPU if available and operation is large enough
         if (isGPUAvailable() && shouldUseGPU(operation_size)) {
             if constexpr (std::is_same_v<T, float>) {
+                return addVectorsGPU(a, b, result, length);
+            } else if constexpr (std::is_same_v<T, double> && hasDoubleSupport) {
                 return addVectorsGPU(a, b, result, length);
             }
         }
@@ -444,6 +456,8 @@ public:
         // Try GPU if available and operation is large enough
         if (isGPUAvailable() && shouldUseGPU(operation_size)) {
             if constexpr (std::is_same_v<T, float>) {
+                return multiplyVectorsGPU(a, b, result, length);
+            } else if constexpr (std::is_same_v<T, double> && hasDoubleSupport) {
                 return multiplyVectorsGPU(a, b, result, length);
             }
         }
@@ -659,6 +673,60 @@ public:
         }
     }
 
+    static bool dotProductGPU(const float* a, const float* b, int length, float& result) {
+        if (!gpu_available) return false;
+        
+        std::lock_guard<std::mutex> lock(gl_mutex);
+        
+        try {
+            // Use the vector dot product shader
+            glUseProgram(floatVecDotProgram);
+            
+            // Create and bind buffers
+            GLuint aBuffer, bBuffer, resultBuffer;
+            glGenBuffers(1, &aBuffer);
+            glGenBuffers(1, &bBuffer);
+            glGenBuffers(1, &resultBuffer);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, aBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(float), a, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, bBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(float), b, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(float), nullptr, GL_STATIC_COPY);
+            
+            // Set uniform
+            glUniform1i(glGetUniformLocation(floatVecDotProgram, "length"), length);
+            
+            // Bind buffers to shader storage blocks
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, aBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, bBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, resultBuffer);
+            
+            // Dispatch compute shader
+            glDispatchCompute((length + 255) / 256, 1, 1);
+            
+            // Wait for completion
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            
+            // Read back results
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(float), &result);
+            
+            // Clean up
+            glDeleteBuffers(1, &aBuffer);
+            glDeleteBuffers(1, &bBuffer);
+            glDeleteBuffers(1, &resultBuffer);
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "GPU dot product failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
     // CPU-specific implementations
     template<typename T>
     static void multiplyMatricesThreaded(
@@ -733,6 +801,169 @@ public:
         }
     }
 
+    // GPU-specific implementations for double precision
+    static bool addVectorsGPU(const double* a, const double* b, double* result, int length) {
+        if (!gpu_available || !hasDoubleSupport) return false;
+        
+        std::lock_guard<std::mutex> lock(gl_mutex);
+        
+        try {
+            // Use the double precision vector addition shader
+            glUseProgram(doubleVecAddProgram);
+            
+            // Create and bind buffers
+            GLuint aBuffer, bBuffer, resultBuffer;
+            glGenBuffers(1, &aBuffer);
+            glGenBuffers(1, &bBuffer);
+            glGenBuffers(1, &resultBuffer);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, aBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), a, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, bBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), b, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), nullptr, GL_STATIC_COPY);
+            
+            // Set uniform
+            glUniform1i(glGetUniformLocation(doubleVecAddProgram, "length"), length);
+            
+            // Bind buffers to shader storage blocks
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, aBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, bBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, resultBuffer);
+            
+            // Dispatch compute shader
+            glDispatchCompute((length + 255) / 256, 1, 1);
+            
+            // Wait for completion
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            
+            // Read back results
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, length * sizeof(double), result);
+            
+            // Clean up
+            glDeleteBuffers(1, &aBuffer);
+            glDeleteBuffers(1, &bBuffer);
+            glDeleteBuffers(1, &resultBuffer);
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "GPU vector addition failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    static bool multiplyVectorsGPU(const double* a, const double* b, double* result, int length) {
+        if (!gpu_available || !hasDoubleSupport) return false;
+        
+        std::lock_guard<std::mutex> lock(gl_mutex);
+        
+        try {
+            // Use the double precision vector multiplication shader
+            glUseProgram(doubleVecMultProgram);
+            
+            // Create and bind buffers
+            GLuint aBuffer, bBuffer, resultBuffer;
+            glGenBuffers(1, &aBuffer);
+            glGenBuffers(1, &bBuffer);
+            glGenBuffers(1, &resultBuffer);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, aBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), a, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, bBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), b, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), nullptr, GL_STATIC_COPY);
+            
+            // Set uniform
+            glUniform1i(glGetUniformLocation(doubleVecMultProgram, "length"), length);
+            
+            // Bind buffers to shader storage blocks
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, aBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, bBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, resultBuffer);
+            
+            // Dispatch compute shader
+            glDispatchCompute((length + 255) / 256, 1, 1);
+            
+            // Wait for completion
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            
+            // Read back results
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, length * sizeof(double), result);
+            
+            // Clean up
+            glDeleteBuffers(1, &aBuffer);
+            glDeleteBuffers(1, &bBuffer);
+            glDeleteBuffers(1, &resultBuffer);
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "GPU vector multiplication failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    static bool dotProductGPU(const double* a, const double* b, int length, double& result) {
+        if (!gpu_available || !hasDoubleSupport) return false;
+        
+        std::lock_guard<std::mutex> lock(gl_mutex);
+        
+        try {
+            // Use the double precision dot product shader
+            glUseProgram(doubleVecDotProgram);
+            
+            // Create and bind buffers
+            GLuint aBuffer, bBuffer, resultBuffer;
+            glGenBuffers(1, &aBuffer);
+            glGenBuffers(1, &bBuffer);
+            glGenBuffers(1, &resultBuffer);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, aBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), a, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, bBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, length * sizeof(double), b, GL_STATIC_READ);
+            
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(double), nullptr, GL_STATIC_COPY);
+            
+            // Set uniform
+            glUniform1i(glGetUniformLocation(doubleVecDotProgram, "length"), length);
+            
+            // Bind buffers to shader storage blocks
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, aBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, bBuffer);
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, resultBuffer);
+            
+            // Dispatch compute shader
+            glDispatchCompute((length + 255) / 256, 1, 1);
+            
+            // Wait for completion
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            
+            // Read back results
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, resultBuffer);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(double), &result);
+            
+            // Clean up
+            glDeleteBuffers(1, &aBuffer);
+            glDeleteBuffers(1, &bBuffer);
+            glDeleteBuffers(1, &resultBuffer);
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "GPU dot product failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
     // Clean up resources
     static void cleanup() {
         if (gpu_available) {
@@ -756,6 +987,26 @@ public:
             if (floatVecMultProgram) {
                 glDeleteProgram(floatVecMultProgram);
                 floatVecMultProgram = 0;
+            }
+            
+            if (floatVecDotProgram) {
+                glDeleteProgram(floatVecDotProgram);
+                floatVecDotProgram = 0;
+            }
+            
+            if (doubleVecAddProgram) {
+                glDeleteProgram(doubleVecAddProgram);
+                doubleVecAddProgram = 0;
+            }
+            
+            if (doubleVecMultProgram) {
+                glDeleteProgram(doubleVecMultProgram);
+                doubleVecMultProgram = 0;
+            }
+            
+            if (doubleVecDotProgram) {
+                glDeleteProgram(doubleVecDotProgram);
+                doubleVecDotProgram = 0;
             }
             
             if (window) {
@@ -783,6 +1034,10 @@ GLuint HardwareAccelerator::floatMatMulProgram = 0;
 GLuint HardwareAccelerator::doubleMatMulProgram = 0;
 GLuint HardwareAccelerator::floatVecAddProgram = 0;
 GLuint HardwareAccelerator::floatVecMultProgram = 0;
+GLuint HardwareAccelerator::floatVecDotProgram = 0;
+GLuint HardwareAccelerator::doubleVecAddProgram = 0;
+GLuint HardwareAccelerator::doubleVecMultProgram = 0;
+GLuint HardwareAccelerator::doubleVecDotProgram = 0;
 bool HardwareAccelerator::glInitialized = false;
 std::mutex HardwareAccelerator::gl_mutex;
 std::atomic<bool> HardwareAccelerator::initialized(false);
