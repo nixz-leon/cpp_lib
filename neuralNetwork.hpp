@@ -30,6 +30,7 @@ class nn_double{
         double learning_rate;
         bool softmax = true;
         
+<<<<<<< HEAD
         // Stable leaky ReLU with alpha=0.01
         double act_func(double x) {
             return x > 0 ? x : 0.1 * x;
@@ -50,46 +51,106 @@ class nn_double{
             if (x > MAX_VALUE) return MAX_VALUE;
             if (x < -MAX_VALUE) return -MAX_VALUE;
             return x;
-        }
+=======
+        // RNG for weight initialization
+        std::random_device rd;
+        std::mt19937 gen;
         
-        vec<double> apply_act(vec<double> v) {
-            for(int i = 0; i < v.size; i++) {
-                // Apply activation and sanitize result
-                v(i) = sanitize(act_func(v(i)));
-            }
-            return v;
-        }
+        // Pre-allocated memory for calculations
+        vec<double> final_error;
+        vecs<double> layer_errors;
+        vec<double> error_temp;
+        matrix<double> hidden_updates;
+        vec<double> pre_activation;
         
-        vec<double> apply_deriv(vec<double> v) {
-            for(int i = 0; i < v.size; i++) {
-                // Apply derivative and sanitize result
-                v(i) = sanitize(act_deriv(v(i)));
+        // Stable leaky ReLU with alpha=0.01
+        //double act_func(double x) {return x > 0 ? x : 0.01 * x;}
+        //double act_deriv(double x) {return x > 0 ? 1.0 : 0.01;}
+        inline void act_func(double &x) {x =1.0/(1.0+exp(-x));}
+        inline void act_deriv(double &x) {x= x*(1.0-x);}
+        
+        // Ensure values are finite and within reasonable bounds
+        inline void sanitize(double &x) {
+            // Check for NaN or infinity and replace with 0
+            bool invalid = std::isnan(x) || std::isinf(x);
+            x = invalid ? 0.0 : x;
+            
+            // Clip to MAX_VALUE
+            const double MAX_VALUE = 1e6;
+            x = (x > MAX_VALUE) ? MAX_VALUE : x;
+            x = (x < -MAX_VALUE) ? -MAX_VALUE : x;
+>>>>>>> 089e32ab5a9e6068432af90a86f456738c9279da
+        }
+        inline void sanitize(vec<double> &v){
+            for(int i = 0; i < v.size; i++){
+                sanitize(v(i));
             }
-            return v;
+        }
+        inline void sanitize(matrix<double> &m){
+            for(int i = 0; i < m.row; i++){
+                for(int j = 0; j < m.col; j++){
+                    sanitize(m(i,j));
+                }
+            }
+        }
+        inline void apply_act(vec<double> &v) {
+            int i = 0;
+            // Unroll the loop in chunks of 4
+            for(; i <= v.size - 4; i += 4) {
+                act_func(v(i));
+                act_func(v(i+1));
+                act_func(v(i+2));
+                act_func(v(i+3));
+                sanitize(v(i));
+                sanitize(v(i+1));
+                sanitize(v(i+2));
+                sanitize(v(i+3));
+            }
+            // Handle remaining elements
+            for(; i < v.size; i++) {
+                act_func(v(i));
+                sanitize(v(i));
+            }
+        }   
+        
+        inline void apply_deriv(vec<double> &v) {
+            int i = 0;
+            // Unroll the loop in chunks of 4
+            for(; i <= v.size - 4; i += 4) {
+                act_deriv(v(i));
+                act_deriv(v(i+1));
+                act_deriv(v(i+2));
+                act_deriv(v(i+3));
+                sanitize(v(i));
+                sanitize(v(i+1));
+                sanitize(v(i+2));
+                sanitize(v(i+3));
+            }
+            // Handle remaining elements
+            for(; i < v.size; i++) {
+                act_deriv(v(i));
+                sanitize(v(i));
+            }
         }
 
     public:
         void init_mat(matrix<double> &mat, double scale){
-            std::random_device rd;
-            std::mt19937 gen(rd());
             std::normal_distribution<double> dist(0.0, scale);
-            for(int i =0; i < mat.row; i++){
-                for(int j =0; j < mat.col; j++){
+            for(int i = 0; i < mat.row; i++){
+                for(int j = 0; j < mat.col; j++){
                     mat(i,j) = dist(gen);
                 }
             }
         };
         void init_vec(vec<double> &vec, double scale){
-            std::random_device rd;
-            std::mt19937 gen(rd());
             std::normal_distribution<double> dist(0.0, scale);
-            for(int i=0; i<vec.size; i++){
+            for(int i = 0; i < vec.size; i++){
                 vec(i) = dist(gen);
             }
         }
         nn_double(int input_dim, int output_dim, int hidden_layers_count, 
                   int nodes_per_layer, int num_epochs = 100, double lr = 0.01, 
-                  bool use_softmax = true) {
+                  bool use_softmax = true) : gen(rd()) {
             input_size = input_dim;
             output_size = output_dim;
             hidden_layers = hidden_layers_count;
@@ -106,6 +167,13 @@ class nn_double{
             layer_outputs = vecs<double>(hidden_layers, per_layer);
             in_layer_outputs = vec<double>(input_size);
             out_layer_outputs = vec<double>(output_dim);
+
+            // Initialize pre-allocated memory
+            final_error = vec<double>(output_size);
+            layer_errors = vecs<double>(hidden_layers, per_layer);
+            error_temp = vec<double>(per_layer);
+            hidden_updates = matrix<double>(per_layer, per_layer);
+            pre_activation = vec<double>(std::max(per_layer, output_size));
 
             // He initialization for ReLU variants
             double input_scale = std::sqrt(2.0 / input_size);
@@ -131,12 +199,17 @@ class nn_double{
             init_vec(out_bias,0.01);
         };
         inline double mse(vec<double> &pred, vec<double> &actual){
-            vec<double> error = pred - actual;
-            return (error * error);
+            double sum = 0.0;
+            for(int i = 0; i < pred.size; i++) {
+                double diff = pred(i) - actual(i);
+                sum += diff * diff;
+            }
+            return sum / pred.size;
         };
-        inline vec<double> mse_deriv(vec<double> &pred, vec<double> &actual){
-            vec<double> error = 2*(pred - actual);
-            return error;
+        inline void mse_deriv(vec<double> &pred, vec<double> &actual, vec<double> &result){
+            for(int i = 0; i < pred.size; i++) {
+                result(i) = 2.0 * (pred(i) - actual(i));
+            }
         }
 
 
@@ -145,100 +218,117 @@ class nn_double{
             // Store input for backpropagation
             in_layer_outputs = input;
             
-            // Sanitize input to prevent NaN propagation
-            for(int i = 0; i < in_layer_outputs.size; i++) {
-                in_layer_outputs(i) = sanitize(in_layer_outputs(i));
-            }
+            // Only sanitize input once
+            sanitize(in_layer_outputs);
             
             if(hidden_layers > 0) {
                 // First hidden layer
-                vec<double> pre_activation = in_weights * in_layer_outputs + biases(0);
-                // Sanitize pre-activation values
-                for(int i = 0; i < pre_activation.size; i++) {
-                    pre_activation(i) = sanitize(pre_activation(i));
-                }
-                layer_outputs(0) = apply_act(pre_activation);
+                pre_activation = in_weights * in_layer_outputs + biases(0);
+                layer_outputs(0) = pre_activation;
+                apply_act(layer_outputs(0));
                 
                 // Subsequent hidden layers
                 for(int i = 1; i < hidden_layers; i++) {
                     pre_activation = weights(i-1) * layer_outputs(i-1) + biases(i);
-                    // Sanitize pre-activation values
-                    for(int j = 0; j < pre_activation.size; j++) {
-                        pre_activation(j) = sanitize(pre_activation(j));
-                    }
-                    layer_outputs(i) = apply_act(pre_activation);
+                    layer_outputs(i) = pre_activation;
+                    apply_act(layer_outputs(i));
                 }
                 
                 // Output layer
-                vec<double> out_pre_activation = out_weights * layer_outputs.back() + out_bias;
-                // Sanitize pre-activation values
-                for(int i = 0; i < out_pre_activation.size; i++) {
-                    out_pre_activation(i) = sanitize(out_pre_activation(i));
-                }
-                out_layer_outputs = apply_act(out_pre_activation);
+                pre_activation = out_weights * layer_outputs.back() + out_bias;
+                out_layer_outputs = pre_activation;
+                apply_act(out_layer_outputs);
             } else {
                 // Single layer network
-                vec<double> pre_activation = in_weights * in_layer_outputs + out_bias;
-                // Sanitize pre-activation values
-                for(int i = 0; i < pre_activation.size; i++) {
-                    pre_activation(i) = sanitize(pre_activation(i));
-                }
-                out_layer_outputs = apply_act(pre_activation);
-            }
-            
-            // Final output check
-            for(int i = 0; i < out_layer_outputs.size; i++) {
-                if(std::isnan(out_layer_outputs(i)) || std::isinf(out_layer_outputs(i))) {
-                    std::cerr << "Warning: NaN or Inf detected in output. Replacing with 0." << std::endl;
-                    out_layer_outputs(i) = 0.0;
-                }
+                pre_activation = in_weights * in_layer_outputs + out_bias;
+                out_layer_outputs = pre_activation;
+                apply_act(out_layer_outputs);
             }
             
             return out_layer_outputs;
         };
         
         inline void back_prop(vec<double> &actual) {
-            vec<double> final_error;
-            vecs<double> layer_errors(hidden_layers, per_layer);
-            
             if(hidden_layers > 0){
-                final_error = element_mult(mse_deriv(out_layer_outputs, actual), apply_deriv(out_layer_outputs));
+                apply_deriv(out_layer_outputs);
+                
+                // Calculate error derivative
+                mse_deriv(out_layer_outputs, actual, final_error);
+                
+                // Apply activation derivative
+                for(int i = 0; i < final_error.size; i++) {
+                    final_error(i) *= out_layer_outputs(i);
+                }
+                
+                // Rest of the function
                 out_weights = out_weights - learning_rate * outer_product(final_error, layer_outputs.back());
                 out_bias = out_bias - learning_rate * final_error;
-                layer_errors(hidden_layers-1) = element_mult(transpose(out_weights) * final_error, apply_deriv(layer_outputs(hidden_layers-1)));
+                apply_deriv(layer_outputs(hidden_layers-1));
+                layer_errors(hidden_layers-1) = element_mult(transpose(out_weights) * final_error, layer_outputs(hidden_layers-1));
                 if (hidden_layers > 1) {
-                    matrix<double> hidden_updates = outer_product(layer_errors(hidden_layers-1), layer_outputs(hidden_layers-2));
+                    hidden_updates = outer_product(layer_errors(hidden_layers-1), layer_outputs(hidden_layers-2));
                     
                     // Apply and sanitize weight updates
                     for(int i = 0; i < weights(hidden_layers-2).row; i++) {
                         for(int j = 0; j < weights(hidden_layers-2).col; j++) {
-                            double update = sanitize(learning_rate * hidden_updates(i, j));
+                            double update = learning_rate * hidden_updates(i, j);
+                            sanitize(update);
                             weights(hidden_layers-2)(i, j) -= update;
-                            weights(hidden_layers-2)(i, j) = sanitize(weights(hidden_layers-2)(i, j));
                         }
                     }
                 }
                 
                 // Update biases for the last hidden layer
                 for(int i = 0; i < biases(hidden_layers-1).size; i++) {
-                    double update = sanitize(learning_rate * layer_errors(hidden_layers-1)(i));
+                    double update = learning_rate * layer_errors(hidden_layers-1)(i);
+                    sanitize(update);
                     biases(hidden_layers-1)(i) -= update;
-                    biases(hidden_layers-1)(i) = sanitize(biases(hidden_layers-1)(i));
                 }
                 
                 // Backpropagate through remaining hidden layers
                 for(int i = hidden_layers-2; i >= 0; i--) {
-                    layer_errors(i) = element_mult(transpose(weights(i)) * layer_errors(i+1), apply_deriv(layer_outputs(i)));
+                    apply_deriv(layer_outputs(i));
+                    layer_errors(i) = element_mult(transpose(weights(i)) * layer_errors(i+1), layer_outputs(i));
                     if(i > 0){
-                        weights(i-1) = weights(i-1) - learning_rate * outer_product(layer_errors(i), layer_outputs(i-1));
+                        hidden_updates = outer_product(layer_errors(i), layer_outputs(i-1));
+                        for(int r = 0; r < weights(i-1).row; r++) {
+                            for(int c = 0; c < weights(i-1).col; c++) {
+                                double update = learning_rate * hidden_updates(r, c);
+                                sanitize(update);
+                                weights(i-1)(r, c) -= update;
+                            }
+                        }
                     } else {
-                        in_weights = in_weights - learning_rate * outer_product(layer_errors(0), in_layer_outputs);
+                        hidden_updates = outer_product(layer_errors(0), in_layer_outputs);
+                        for(int r = 0; r < in_weights.row; r++) {
+                            for(int c = 0; c < in_weights.col; c++) {
+                                double update = learning_rate * hidden_updates(r, c);
+                                sanitize(update);
+                                in_weights(r, c) -= update;
+                            }
+                        }
                     }
                     biases(i) = biases(i) - learning_rate * layer_errors(i);
                 }
             } else {
-                final_error = element_mult(mse_deriv(out_layer_outputs, actual), apply_deriv(out_layer_outputs));
-                in_weights = in_weights - learning_rate * outer_product(final_error, in_layer_outputs);
+                apply_deriv(out_layer_outputs);
+                
+                // Calculate error derivative
+                mse_deriv(out_layer_outputs, actual, final_error);
+                
+                // Apply activation derivative
+                for(int i = 0; i < final_error.size; i++) {
+                    final_error(i) *= out_layer_outputs(i);
+                }
+                
+                hidden_updates = outer_product(final_error, in_layer_outputs);
+                for(int r = 0; r < in_weights.row; r++) {
+                    for(int c = 0; c < in_weights.col; c++) {
+                        double update = learning_rate * hidden_updates(r, c);
+                        sanitize(update);
+                        in_weights(r, c) -= update;
+                    }
+                }
                 out_bias = out_bias - learning_rate * final_error;
             }
         };
@@ -255,22 +345,45 @@ class nn_double{
                 std::cout << "Error: Number of inputs and targets must match" << std::endl;
                 return;
             }
+            
             double reg_lambda = 0.0001;
+            double weight_decay = 1.0 - learning_rate * reg_lambda;
+            
             for (int epoch = 0; epoch < num_epochs; epoch++) {
                 double total_error = 0.0;
+                
                 for (int i = 0; i < num_samples; i++) {
-                    vec<double> output = forward_prop(inputs(i));
-                    total_error += mse(output, targets(i));
+                    // Forward propagation reuses pre-allocated memory
+                    forward_prop(inputs(i));
+                    total_error += mse(out_layer_outputs, targets(i));
+                    
+                    // Back propagation reuses pre-allocated memory
                     back_prop(targets(i));
+                    
+                    // Apply weight decay (L2 regularization)
                     if (hidden_layers > 0) {
-                        in_weights = in_weights * (1.0 - learning_rate * reg_lambda);
-                        for (int layer = 0; layer < hidden_layers-1; layer++) {
-                            weights(layer) = weights(layer) * (1.0 - learning_rate * reg_lambda);
+                        // Use direct multiplication for efficiency
+                        for(int r = 0; r < in_weights.row; r++) {
+                            for(int c = 0; c < in_weights.col; c++) {
+                                in_weights(r, c) *= weight_decay;
+                            }
                         }
-                        out_weights = out_weights * (1.0 - learning_rate * reg_lambda); 
+                        
+                        for (int layer = 0; layer < hidden_layers-1; layer++) {
+                            for(int r = 0; r < weights(layer).row; r++) {
+                                for(int c = 0; c < weights(layer).col; c++) {
+                                    weights(layer)(r, c) *= weight_decay;
+                                }
+                            }
+                        }
+                        
+                        for(int r = 0; r < out_weights.row; r++) {
+                            for(int c = 0; c < out_weights.col; c++) {
+                                out_weights(r, c) *= weight_decay;
+                            }
+                        }
                     }
                 }
-
             }
         }
         
