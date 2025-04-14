@@ -709,7 +709,7 @@ namespace sm {
 
                 // Count the labels of the k nearest neighbors
                 vec<int> label_counts(y_train.max() + 1);  // Assuming labels are non-negative integers
-                label_counts.set(0);  // Initialize counts to zero
+                label_counts;  // Initialize counts to zero
                 for (int j = 0; j < k; j++) {
                     int label = static_cast<int>(y_train(nearest_neighbors(j)));
                     label_counts(label)++;
