@@ -5,12 +5,12 @@
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
-#include "HardwareAccelerator.hpp"
+#include "OpenCLAccelerator.hpp"
 
 // Define constants for hardware acceleration
-#define CACHE_BLOCK_SIZE HardwareAccelerator::getCacheBlockSize()
-#define THREAD_SIZE_THRESHOLD HardwareAccelerator::getThreadThreshold()
-#define GPU_SIZE_THRESHOLD HardwareAccelerator::getGPUThreshold()
+#define CACHE_BLOCK_SIZE OpenCLAccelerator::getCacheBlockSize()
+#define THREAD_SIZE_THRESHOLD OpenCLAccelerator::getThreadThreshold()
+#define GPU_SIZE_THRESHOLD OpenCLAccelerator::getGPUThreshold()
 
 template <typename T>
 class matrix {  
@@ -184,25 +184,25 @@ class matrix {
             const size_t total_operations = total_elements * a.col;
             
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    matrix<T> result(a.row, b.col);
-                    bool success = HardwareAccelerator::multiplyMatrices(
-                        a.data, a.row, a.col,
-                        b.data, b.row, b.col,
-                        result.data
-                    );
-                    
-                    if (success) {
-                        return result;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(total_operations)) {
+                        matrix<T> result(a.row, b.col);
+                        bool success = OpenCLAccelerator::multiplyMatrices(
+                            a.data, a.row, a.col,
+                            b.data, b.row, b.col,
+                            result.data
+                        );
+                        
+                        if (success) {
+                            return result;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
             
             // Use multithreaded CPU implementation for larger matrices
             if (total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
@@ -230,24 +230,24 @@ class matrix {
             }
 
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    bool success = HardwareAccelerator::multiplyMatrices(
-                        data, row, col,
-                        other.data, other.row, other.col,
-                        result.data
-                    );
-                    
-                    if (success) {
-                        return;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(row * other.col * col)) {
+                        bool success = OpenCLAccelerator::multiplyMatrices(
+                            data, row, col,
+                            other.data, other.row, other.col,
+                            result.data
+                        );
+                        
+                        if (success) {
+                            return;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
 
             const int block = CACHE_BLOCK_SIZE;
             
@@ -448,24 +448,24 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
     }
 
     // Use hardware acceleration if available
-    #ifdef HARDWARE_ACCELERATION_ENABLED
     try {
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-            vec<T> result(this->row);
-            bool success = HardwareAccelerator::multiplyMatrixVector(
-                this->data, this->row, this->col,
-                b.data, result.data
-            );
-            
-            if (success) {
-                return result;
+            if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(this->row * this->col)) {
+                vec<T> result(this->row);
+                bool success = OpenCLAccelerator::multiplyMatrixVector(
+                    this->data, this->row, this->col,
+                    b.data, result.data
+                );
+                
+                if (success) {
+                    return result;
+                }
             }
         }
     } catch (const std::exception& e) {
         // Fall back to CPU if hardware acceleration fails
-        std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+        std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
     }
-    #endif
 
     // CPU implementation as fallback
     vec<T> temp(this->row);

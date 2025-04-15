@@ -30,8 +30,8 @@
 #include <thread>
 #endif
 
-// Include HardwareAccelerator header
-#include "HardwareAccelerator.hpp"
+// Include OpenCLAccelerator header
+#include "OpenCLAccelerator.hpp"
 
 
 // Forward declaration of FFT function used in the vec class
@@ -79,7 +79,7 @@ class vec {
 
         static inline vec<T> addThreaded(const vec<T>& a, const vec<T>& b) {
             vec<T> result(a.size);
-            const int block = HardwareAccelerator::getCacheBlockSize();
+            const int block = OpenCLAccelerator::getCacheBlockSize();
             
             // Calculate optimal number of threads based on CPU cores and vector size
             int num_threads = std::min(
@@ -127,7 +127,7 @@ class vec {
 
         static inline vec<T> subtractThreaded(const vec<T>& a, const vec<T>& b) {
             vec<T> result(a.size);
-            const int block = HardwareAccelerator::getCacheBlockSize();
+            const int block = OpenCLAccelerator::getCacheBlockSize();
             
             // Calculate optimal number of threads based on CPU cores and vector size
             int num_threads = std::min(
@@ -177,26 +177,26 @@ class vec {
             }
 
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    vec<T> result(a.size);
-                    bool success = HardwareAccelerator::addVectors(
-                        a.data, b.data, result.data, a.size
-                    );
-                    
-                    if (success) {
-                        return result;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(a.size)) {
+                        vec<T> result(a.size);
+                        bool success = OpenCLAccelerator::addVectors(
+                            a.data, b.data, result.data, a.size
+                        );
+                        
+                        if (success) {
+                            return result;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
 
             // Use multithreaded CPU implementation for larger vectors
-            if (a.size >= HardwareAccelerator::getThreadThreshold()) {
+            if (a.size >= OpenCLAccelerator::getThreadThreshold()) {
                 return addThreaded(a, b);
             }
             
@@ -216,34 +216,34 @@ class vec {
             }
 
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    vec<T> result(a.size);
-                    vec<T> negated_b(b.size);
-                    
-                    // Negate b and then add
-                    #pragma omp simd
-                    for (int i = 0; i < b.size; i++) {
-                        negated_b.data[i] = -b.data[i];
-                    }
-                    
-                    bool success = HardwareAccelerator::addVectors(
-                        a.data, negated_b.data, result.data, a.size
-                    );
-                    
-                    if (success) {
-                        return result;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(a.size)) {
+                        vec<T> result(a.size);
+                        vec<T> negated_b(b.size);
+                        
+                        // Negate b and then add
+                        #pragma omp simd
+                        for (int i = 0; i < b.size; i++) {
+                            negated_b.data[i] = -b.data[i];
+                        }
+                        
+                        bool success = OpenCLAccelerator::addVectors(
+                            a.data, negated_b.data, result.data, a.size
+                        );
+                        
+                        if (success) {
+                            return result;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
 
             // Use multithreaded CPU implementation for larger vectors
-            if (a.size >= HardwareAccelerator::getThreadThreshold()) {
+            if (a.size >= OpenCLAccelerator::getThreadThreshold()) {
                 return subtractThreaded(a, b);
             }
             
@@ -276,23 +276,23 @@ class vec {
             }
 
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    T result = 0;
-                    bool success = HardwareAccelerator::dotProduct(
-                        a.data, b.data, a.size, result
-                    );
-                    
-                    if (success) {
-                        return result;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(a.size)) {
+                        T result = 0;
+                        bool success = OpenCLAccelerator::dotProduct(
+                            a.data, b.data, a.size, result
+                        );
+                        
+                        if (success) {
+                            return result;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
 
             // CPU implementation as fallback
             T sum = 0;
@@ -315,23 +315,23 @@ class vec {
             }
 
             // Use hardware acceleration if available
-            #ifdef HARDWARE_ACCELERATION_ENABLED
             try {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-                    vec<T> result(a.size);
-                    bool success = HardwareAccelerator::multiplyVectors(
-                        a.data, b.data, result.data, a.size
-                    );
-                    
-                    if (success) {
-                        return result;
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(a.size)) {
+                        vec<T> result(a.size);
+                        bool success = OpenCLAccelerator::multiplyVectors(
+                            a.data, b.data, result.data, a.size
+                        );
+                        
+                        if (success) {
+                            return result;
+                        }
                     }
                 }
             } catch (const std::exception& e) {
                 // Fall back to CPU if hardware acceleration fails
-                std::cerr << "Hardware acceleration failed, using CPU: " << e.what() << std::endl;
+                std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
             }
-            #endif
 
             // CPU implementation as fallback
             vec<T> result(a.size);
@@ -340,6 +340,33 @@ class vec {
                 result.data[i] = a.data[i] * b.data[i];
             }
             return result;
+        };
+        inline T max(){
+            T max_val = data[0];
+            for (int i = 1; i < size; i++) {
+                if (data[i] > max_val) {
+                    max_val = data[i];
+                }
+            }
+            return max_val;
+        }
+
+        inline T mean(){
+            T sum = 0;
+            for (int i = 0; i < size; i++) {
+                sum += data[i];
+            }
+            return sum / size;
+        }
+
+        inline T min(){
+            T min_val = data[0];
+            for (int i = 1; i < size; i++) {
+                if (data[i] < min_val) {
+                    min_val = data[i];
+                }
+            }
+            return min_val;
         }
 };
 
