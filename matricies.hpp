@@ -6,10 +6,10 @@
 template <class T>
 class matricies {
 private:
-    matrix<T>* mats;
     int num_matricies;
     int size_n;
     int size_m;
+    matrix<T>* mats;
 public:
     matricies(); // Default constructor
     matricies(int num_matricies, int n, int m); // Normal constructor
@@ -32,7 +32,7 @@ public:
 
 //default
 template <class T>
-matricies<T>::matricies() : mats(nullptr), num_matricies(0), size_n(0), size_m(0) {};
+matricies<T>::matricies() : num_matricies(0), size_n(0), size_m(0), mats(nullptr) {};
 
 //normal constructor
 template <class T>
@@ -74,7 +74,7 @@ matricies<T>& matricies<T>::operator=(const matricies<T>& other) {
 }
 //move constructor
 template <class T>
-inline matricies<T>::matricies(matricies<T> &&other) noexcept : mats(other.mats), size_n(other.size_n), size_m(other.size_m), num_matricies(other.num_matricies) {
+inline matricies<T>::matricies(matricies<T> &&other) noexcept : num_matricies(other.num_matricies), size_n(other.size_n), size_m(other.size_m), mats(other.mats)  {
     other.mats = nullptr;
     other.num_matricies = 0;
     other.size_m = 0;
