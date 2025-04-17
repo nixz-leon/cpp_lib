@@ -549,8 +549,6 @@ namespace sm {
             // Initialize weights and biases
             all_weights = matrix<T>(num_classes, n_features);
             all_biases = vec<T>(num_classes);
-            all_biases.set(0);
-
             // Train one classifier per class
             for (int c = 0; c < num_classes; c++) {
                 // Create binary labels

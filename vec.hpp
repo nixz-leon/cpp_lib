@@ -368,6 +368,13 @@ class vec {
             }
             return min_val;
         }
+        inline T sum(){
+            T sum = 0;
+            for(int i =1; i < size; i++){
+                sum+=data[i];
+            }
+            return sum;
+        }
 };
 
 template <typename T>
