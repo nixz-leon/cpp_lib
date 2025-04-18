@@ -375,6 +375,13 @@ class vec {
             }
             return sum;
         }
+        inline friend vec<T> operator-(vec<T> a, T c){
+            vec<T> result(a.size);
+            for(int i = 0; i < a.size; i++){
+                result(i) = a(i) - c;
+            }
+            return result;
+        }
 };
 
 template <typename T>

@@ -106,18 +106,18 @@ class loss_function{
         static float cross_entropy(vec<float> &pred, vec<float> &actual){
             float loss = 0.0f;
             for(int i = 0; i < pred.size; i++){
-                if(actual(i) > 0) {
-                    loss -= actual(i) * std::log(std::max(pred(i), 1e-15f));
-                }
+                // Add small epsilon to avoid log(0)
+                float p = std::max(std::min(pred(i), 1.0f - 1e-15f), 1e-15f);
+                loss -= actual(i) * std::log(p) + (1.0f - actual(i)) * std::log(1.0f - p);
             }
             return loss;
         }
         static vec<float> cross_entropy_deriv(vec<float> &pred, vec<float> &actual){
             vec<float> error(pred.size);
             for(int i = 0; i < pred.size; i++){
-                if(actual(i) > 0) {
-                    error(i) = -actual(i) / std::max(pred(i), 1e-15f);
-                }
+                // Add small epsilon to avoid division by zero
+                float p = std::max(std::min(pred(i), 1.0f - 1e-15f), 1e-15f);
+                error(i) = (p - actual(i)) / (p * (1.0f - p));
             }
             return error;
         }
@@ -189,6 +189,10 @@ class loss_function{
 
 //changing nn_linear_double to just store weights, bias, and an in to call act functions
 
+//I need to change this to be a fully matrix based approach, which is going to a pita
+//this means that outputs are going to be in the for std::vector<matrix<float>> rather than vectors
+//also need to update the back propagation and seriously work on making sure the math matches
+//This might be generally faster than the way I doing it currently
 class NeuralNetwork {
 private:
     std::vector<vec<float>> outputs;
@@ -323,34 +327,32 @@ public:
         if(use_softmax) {
             apply_softmax(outputs.back());
         }
-        
+        //std::cout << "during forward\n";
+        //outputs.back().printout();
         return outputs.back();
     }
     
     // Backward pass through all layers
     void backward(vec<float>& target) {
-        vec<float> delta = loss.deriv(outputs.back(), target);
+        vec<float> delta = element_mult(loss.deriv(outputs.back(), target), fn.deriv(outputs[layer_count], calls.back()));
+        matrix<float> partial = outer_product(delta, outputs[layer_count-1]);
+        //std::cout << "delta \n";
+        //delta.printout();
+        //std::cout << "partial \n";
+        //partial.printout();
+        weights[layer_count-1] = weights[layer_count-1] - learning_rate*(partial);
+        biases[layer_count-1] = biases[layer_count-1] - learning_rate*(delta);
 
-        for(int i = layer_count-1; i >= 0; i--) {
-            // Calculate gradients
-            // delta has dimension of current layer's size
-            // outputs[i] has dimension of previous layer's size (input to this layer)
-            matrix<float> weight_grad = outer_product(delta, outputs[i]);
-            vec<float> bias_grad = delta;
-            
-            // Update weights and biases
-            weights[i] = weights[i] - learning_rate * weight_grad;
-            biases[i] = biases[i] - learning_rate * bias_grad;
-            
-            // Calculate delta for previous layer
-            if(i > 0) {
-                // weights[i] is (current_layer_size × previous_layer_size)
-                // delta is (current_layer_size)
-                // This gives us a vector of (previous_layer_size)
-                delta = transpose(weights[i]) * delta;
-                // Multiply by derivative of activation function at preactivation
-                delta = element_mult(delta, fn.deriv(preactivation[i-1], calls[i]));
-            }
+        for(int i = layer_count-2; i >= 0; i--) {
+            //std::cout << "layer pass " << i << '\n';
+            delta = element_mult(transpose(weights[i+1])*delta,fn.deriv(preactivation[i],calls[i]));
+            partial = outer_product(delta, outputs[i]);
+            //std::cout << "delta \n";
+            //delta.printout();
+            //std::cout << "partial \n";
+            //partial.printout();
+            weights[i] = weights[i] - learning_rate *(partial);
+            biases[i] = biases[i] - learning_rate*(delta);
         }
     }
     
@@ -369,13 +371,32 @@ public:
             float total_loss = 0.0f;            
             for(int idx = 0; idx < num_samples; idx++) {
                 vec<float> output = forward(inputs(idx));
+                //std::cout << "here 1\n";
                 last_error = loss(output, targets(idx));
                 total_loss += last_error;
                 backward(targets(idx));
+                //std::cout << "here 2\n";
                 for(int i = 0; i < layer_count; i++) {
                     weights[i] = weights[i] * (1.0f - learning_rate * reg_lambda);
                 }
             }
         }
     }
+    
 };
+
+/*
+class conv2d_layer{
+    private:
+        int num_filters;
+        int filter_size;
+        int input_x;
+        int input_y;
+        int stride;
+        int padding = 0;
+    public:
+        matrix<float> discrete_colvolution(matrix<float> &input){
+            matrix<float> output();
+}
+}
+*/
