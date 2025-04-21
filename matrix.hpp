@@ -24,6 +24,8 @@ class matrix {
         matrix<T>& operator=(matrix<T>&& other) noexcept;// move assignment 
         T& operator()(int row, int col);
         const T& operator()(int row, int col)const;
+        vec<T> r(int r);
+        vec<T> r(int r) const;
         void printout();
         ~matrix();
         int row;
@@ -365,6 +367,22 @@ inline const T &matrix<T>::operator()(int r, int c) const
 }
 
 template <typename T>
+inline vec<T> matrix<T>::r(int r)
+{
+    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
+    return vec<T>(data + r*col, col);
+}
+
+template <typename T>
+inline vec<T> matrix<T>::r(int r) const
+{
+    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
+    return vec<T>(data + r*col, col);
+}
+
+template <typename T>
 inline void matrix<T>::printout()
 {
     if(data !=nullptr){
@@ -493,3 +511,18 @@ inline matrix<T> outer_product(vec<T> a, vec<T> b){
     }
     return result;
 };
+//need to add hardware acceleration for this
+template <typename T>
+inline matrix<T> hadamard(matrix<T> a, matrix<T> b){
+    if((a.row != b.row)||(a.col != b.col)){
+        std::cout << "Tried to multiply a " << a.row << ','<<a.col<< " matrix with a " << b.row << ',' << b.col << " matrix\n";
+        exit(0);
+    }
+    matrix<T> result(a.row, a.col);
+    for(int i = 0; i < a.row; i++){
+        for(int j = 0; j < a.col; j++){
+            result(i, j) = a(i, j) * b(i, j);
+        }
+    }
+    return result;  
+}

@@ -55,11 +55,27 @@ class vec {
     public:
         vec() : size(0),data(nullptr){} //default
         vec(int n) : size(n) {data = new T[size]();}; //normal
+        vec(T *data, int n) : size(n){
+            this->data = new T[size];
+            std::memcpy(this->data, data, sizeof(T) * size);
+        };
+        vec(std::initializer_list<T> list) : size(list.size()) {
+            data = new T[size];
+            std::copy(list.begin(), list.end(), data);
+        }
         vec(const vec<T> &other);// copy
         vec<T>& operator=(vec<T>& other); //copy assigment
         vec(vec<T> &&other) noexcept;//move
         vec<T>& operator=(vec<T>&& other) noexcept;// move assignment 
-        vec<T> operator=(_init_list_with_square_brackets<T> other);
+        vec<T>& operator=(std::initializer_list<T> list) {
+            if (size != (int)list.size()) {
+                delete[] data;
+                size = list.size();
+                data = new T[size];
+            }
+            std::copy(list.begin(), list.end(), data);
+            return *this;
+        }
         T& operator()(int i);
         const T& operator()(int i)const;
         void printout();
@@ -421,15 +437,6 @@ vec<T> &vec<T>::operator=(vec<T>&& other) noexcept {
     }
     return *this;
 }
-template <class T>
-inline vec<T> vec<T>::operator=(_init_list_with_square_brackets<T> other)
-{
-    this->size = other.size();
-    for(int i = 0; i < other.size(); i ++){
-        this->data[i] = other[i];
-    }
-    return *this;
-};
 
 template <typename T>
 T &vec<T>::operator()(int i) {
