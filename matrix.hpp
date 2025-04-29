@@ -18,14 +18,15 @@ class matrix {
         matrix() : row(0), col(0), data(nullptr) {} //default 
         matrix(int n, int m) : row(n), col(m) {data = new T[row * col]();}; //normal
         matrix(vecs<T> &vectors, bool row_major = false);
+        matrix(vec<T> &vector, bool col_matrix = false);
         matrix(const matrix<T> &other);// copy
         matrix<T>& operator=(matrix<T>& other); //copy assigment
         matrix(matrix<T> &&other) noexcept;//move
         matrix<T>& operator=(matrix<T>&& other) noexcept;// move assignment 
         T& operator()(int row, int col);
         const T& operator()(int row, int col)const;
-        vec<T> r(int r);
-        vec<T> r(int r) const;
+        vec<T> get_row(int r);
+        vec<T> set_row(int r, const vec<T> &v);
         void printout();
         ~matrix();
         int row;
@@ -207,7 +208,7 @@ class matrix {
             }
             
             // Use multithreaded CPU implementation for larger matrices
-            if (total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
+            if ((int)total_operations >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
                 return multiplyThreaded(a, b);
             }
             
@@ -216,6 +217,8 @@ class matrix {
         };
         inline friend matrix<T> operator*(matrix<T> a, T b){matrix<T>temp(a); temp*=b;return temp;};
         inline friend matrix<T> operator*(T b, matrix<T> a){matrix<T>temp(a); temp*=b;return temp;};
+        inline void add_per_row(vec<T> v);
+        inline void add_per_col(vec<T> v);
         inline T sum_elms(){
             T sum = 0;
             for(int i = 0; i < row; i++){
@@ -298,6 +301,24 @@ matrix<T>::matrix(vecs<T> &vectors, bool row_major){
             }
         }
     }
+}
+template <typename T>
+inline matrix<T>::matrix(vec<T> &vector, bool col_matrix){
+    if(col_matrix){
+        row = vector.size;
+        col = 1;
+        data = new T[row*col];
+        for(int i = 0; i < row; i++){
+            data[(col*i)+0] = vector(i);
+        }
+    }else{
+        row = 1;
+        col = vector.size;
+        data = new T[row*col];
+        for(int i = 0; i < col; i++){
+            data[(col*0)+i] = vector(i);
+        }
+    }
 };
 
 template <typename T>
@@ -367,19 +388,19 @@ inline const T &matrix<T>::operator()(int r, int c) const
 }
 
 template <typename T>
-inline vec<T> matrix<T>::r(int r)
+inline vec<T> r(matrix<T> &a, int r)
 {
-    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r > a.row-1){std::cout << "Tried to access row " << r << ", But size is " << a.row-1 << '\n';exit(0);}
     if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
-    return vec<T>(data + r*col, col);
+    return vec<T>(a.data + r*a.col, a.col);
 }
 
 template <typename T>
-inline vec<T> matrix<T>::r(int r) const
+inline const vec<T> r(matrix<T> &a, int r)
 {
-    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r > a.row-1){std::cout << "Tried to access row " << r << ", But size is " << a.row-1 << '\n';exit(0);}
     if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
-    return vec<T>(data + r*col, col);
+    return vec<T>(a.data + r*a.col, a.col);
 }
 
 template <typename T>
@@ -499,7 +520,8 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
         temp.data[i] = sum;
     }
     return temp;
-};
+}
+
 
 template <typename T>
 inline matrix<T> outer_product(vec<T> a, vec<T> b){
@@ -525,4 +547,49 @@ inline matrix<T> hadamard(matrix<T> a, matrix<T> b){
         }
     }
     return result;  
+}
+
+template <typename T>
+inline vec<T> matrix<T>::get_row(int r)
+{
+    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
+    return vec<T>(data + r*col, col);
+}
+
+template <typename T>
+inline vec<T> matrix<T>::set_row(int r, const vec<T> &v)
+{
+    if(r > row-1){std::cout << "Tried to access row " << r << ", But size is " << row-1 << '\n';exit(0);}
+    if(r < 0){std::cout << "tried to access row " << r << " which is negative\n";}
+    if(v.size != col){std::cout << "Vector size " << v.size << " does not match matrix column size " << col << '\n';exit(0);}
+    
+    // Copy the vector data into the matrix row
+    for(int i = 0; i < col; i++) {
+        data[r*col + i] = v(i);
+    }
+    return v;
+}
+
+template<typename T>
+inline void matrix<T>::add_per_row(vec<T> v){
+    if(col != v.size){
+        std::cerr << "vector not the right size\n";
+    }
+    for(int i = 0; i < row; i++){
+        for(int j = 0; j < col; j++){
+            data[(i*col)+j] += v(j);
+        }
+    }
+};
+template <typename T>
+inline void matrix<T>::add_per_col(vec<T> v){
+    if(row != v.size){
+        std::cerr << "vector not the right size\n";
+    }
+    for(int i = 0; i < row; i++){
+        for(int j = 0; j < col; j++){
+            data[(i*col)+j] += v(i);
+        }
+    }
 }
