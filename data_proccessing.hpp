@@ -99,12 +99,31 @@ vec<T> normalize_data(vec<T> &data){
 
 
 template <typename T>
+vecs<T> switch_major_minor(vecs<T> &data){
+    int num_vecs = data.num_of_vecs();
+    int vec_size = data.size();
+    
+    // Create new vecs with swapped dimensions
+    vecs<T> result(vec_size, num_vecs);
+    
+    // Copy data with swapped indices
+    for(int i = 0; i < num_vecs; i++) {
+        for(int j = 0; j < vec_size; j++) {
+            result(j)(i) = data(i)(j);
+        }
+    }
+    
+    return result;
+}
+
+template <typename T>
 void get_data(std::string filename, vecs<T> &data, vecs<T> &labels, bool header = false, char delimiter = ','){
     read_csv(filename, data, header, delimiter);
     vec<T> temp = data.back();
     labels = data_classification(temp);
-    data = data.subset(0, data.num_of_vecs() - 1);
     
+    data = data.subset(0, data.num_of_vecs() - 2);
+    std::cout << data.num_of_vecs() << std::endl;
     for(int i = 0; i < data.num_of_vecs(); i++){
         data(i) = normalize_data(data(i));
     }
