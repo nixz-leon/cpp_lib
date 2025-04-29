@@ -59,6 +59,10 @@ class vec {
             this->data = new T[size];
             std::memcpy(this->data, data, sizeof(T) * size);
         };
+        vec(int n, T val) : size(n){
+            data = new T[size];
+            std::fill(data, data + size, val);
+        }
         vec(std::initializer_list<T> list) : size(list.size()) {
             data = new T[size];
             std::copy(list.begin(), list.end(), data);
