@@ -54,28 +54,21 @@ void read_csv(std::string filename, vecs<T> &vectors, bool header = false, char 
 template <typename T>
 vecs<T> data_classification(vec<T> &labels){
     // Find the maximum class label to determine vector size
-    T max_class = 0;
-    for (int i = 0; i < labels.size; i++) {
-        if (labels(i) > max_class) {
-            max_class = labels(i);
-        }
-    }
-    
+    T max_class = labels.max();
+    T min_class = labels.min();
     // Number of classes is max + 1 (assuming 0-indexed classes)
-    int num_classes = static_cast<int>(max_class) + 1;
+    int num_classes = static_cast<int>(max_class) - static_cast<int>(min_class) + 1;
     
     // Create one-hot encoded vectors (one vector per label)
     vecs<T> one_hot_vectors(labels.size, num_classes);
     
     // For each label
-    for (int i = 0; i < labels.size; i++) {
-        // Initialize all values to 0
-        for (int j = 0; j < num_classes; j++) {
-            one_hot_vectors(i)(j) = 0;
-        }
-        
+    for (int i = 0; i < labels.size; i++) {      
         // Set the 1 at the position indicated by the class label
-        int class_idx = static_cast<int>(labels(i));
+        int class_idx = static_cast<int>(labels(i)) - static_cast<int>(min_class);
+        if(i == 0){
+            std::cout << "class_idx: " << class_idx << std::endl;
+        }
         // Ensure class index is within bounds
         if (class_idx >= 0 && class_idx < num_classes) {
             one_hot_vectors(i)(class_idx) = 1;
@@ -120,6 +113,8 @@ template <typename T>
 void get_data(std::string filename, vecs<T> &data, vecs<T> &labels, bool header = false, char delimiter = ','){
     read_csv(filename, data, header, delimiter);
     vec<T> temp = data.back();
+    std::cout << temp.min() << std::endl;
+    std::cout << temp.max() << std::endl;
     labels = data_classification(temp);
     
     data = data.subset(0, data.num_of_vecs() - 2);

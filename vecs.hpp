@@ -22,8 +22,11 @@ public:
     vec<T>& operator()(int index); // Access operator
     const vec<T>& operator()(int index) const;
     int num_of_vecs() { return num_vecs; };
+    int num_of_vecs() const { return num_vecs; };
     int size() { return size_of_vecs; };
+    int size() const { return size_of_vecs; };
     inline vec<T>& back() { return vectors[num_vecs-1]; };
+    inline const vec<T>& back() const { return vectors[num_vecs-1]; };
     void printout();
     vecs<T> subset(int start_col, int end_col); // Subset function
 };

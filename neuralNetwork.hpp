@@ -8,225 +8,11 @@
 #include <cstdarg>
 #include <iomanip>
 #include <cmath>  // For isnan() and isinf()
+#include <random>
+#include <memory>
 
 
-inline void sanitize_vec(vec<float> &v) {
-    for(int i = 0; i < v.size; i++) {
-        if (std::isnan(v(i)) || std::isinf(v(i))) {
-            v(i) = 0.0f;
-        }
-        const float MAX_VALUE = 1e6f;
-        if (v(i) > MAX_VALUE) v(i) = MAX_VALUE;
-        if (v(i) < -MAX_VALUE) v(i) = -MAX_VALUE;
-    }
-}
-inline void sanitize(float &x){
-    if (std::isnan(x) || std::isinf(x)) {
-        x = 0.0f;
-    }
-    const float MAX_VALUE = 1e6f;
-    if (x > MAX_VALUE) x = MAX_VALUE;
-    if (x < -MAX_VALUE) x = -MAX_VALUE;
-}
-inline void sanitize_mat(matrix<float> &x){
-    for(int i = 0; i < x.row; i++){
-        for(int j = 0; j < x.col; j++){
-            sanitize(x(i,j));
-        }
-    }
-}
 
-/*
-class activation_functions{
-    private:
-        // Activation functions
-        static float relu(float &x){return x>0? x:0;};
-        static float relu_deriv(float &x){return x>0? 1:0;};
-        static float leaky_relu(float &x){return x>0? x:0.01f*x;};
-        static float leaky_relu_deriv(float &x){return x>0? 1:0.01f;};
-        static float sigmoid(float &x){return 1/(1+exp(-x));};
-        static float sigmoid_deriv(float &x){return sigmoid(x)*(1-sigmoid(x));};
-        static float softmax(float &x){return exp(x)/sum(exp(x));};
-        static float softmax_deriv(float &x){return softmax(x)*(1-softmax(x));};
-        float (*act_funcs[4])(float&)={relu, leaky_relu, sigmoid, softmax};
-        float (*act_derivs[4])(float&)={relu_deriv, leaky_relu_deriv, sigmoid_deriv, softmax_deriv};
-    public:
-        inline float operator()(float x, int call){
-            return act_funcs[call](x);
-        };
-        inline float act(float x, int call){
-            return act_funcs[call](x);
-        }
-        inline float deriv(float x, int call){
-            return act_derivs[call](x);
-        };
-        inline vec<float> operator()(vec<float> &v, int call){
-            vec<float> result(v.size);
-            for(int i = 0; i < v.size; i++){
-                result(i) = act_funcs[call](v(i));
-            }
-            return result;
-        };
-        inline vec<float> act(vec<float> &v, int call){
-            vec<float> result(v.size);
-            for(int i = 0; i < v.size; i++){
-                result(i) = act_funcs[call](v(i));
-            }
-            return result;
-        }
-        inline vec<float> deriv(vec<float> &v, int call){
-            vec<float> result(v.size);
-            for(int i = 0; i < v.size; i++){
-                result(i) = act_derivs[call](v(i));
-            }
-            return result;
-        };
-        inline matrix<float> operator()(matrix<float> &m, int call){
-            matrix<float> result(m.row, m.col);
-            for(int i = 0; i < m.row; i++){
-                for(int j = 0; j < m.col; j++){
-                    result(i,j) = act_funcs[call](m(i,j));
-                }
-            }
-            return result;
-        }
-        inline matrix<float> deriv(matrix<float> &m, int call){
-            matrix<float> result(m.row, m.col);
-            for(int i = 0; i < m.row; i++){
-                for(int j = 0; j < m.col; j++){
-                    result(i,j) = act_derivs[call](m(i,j));
-                }
-            }
-            return result;
-        }
-        inline float(*get_act_func(int call))(float&){return act_funcs[call];};
-        inline float(*get_act_deriv(int call))(float&){return act_derivs[call];};
-};
-
-class loss_function{
-    private:
-        static float mse(const vec<float> &pred, const vec<float> &actual){
-            vec<float> error = pred - actual;
-            return (error * error);
-        };
-        static vec<float> mse_deriv(const vec<float> &pred, const vec<float> &actual){
-            vec<float> error = 2*(pred - actual);
-            return error;
-        }
-        static float mae(const vec<float> &pred, const vec<float> &actual){
-            vec<float> e = pred - actual;
-            float loss = 0.0f;
-            for(int i =0; i < e.size; i++){
-                loss += std::abs(e(i));
-            }
-            return loss/e.size;
-        }
-        static vec<float> mae_deriv(const vec<float> &pred, const vec<float> &actual){
-            vec<float> e = pred - actual;
-            vec<float> result(e.size);
-            for(int i = 0; i < e.size; i++){
-                result(i) = (e(i) > 0) ? 1 : -1;
-            }
-            return result;
-        }
-        static float cross_entropy(const vec<float> &pred, const vec<float> &actual){
-            float loss = 0.0f;
-            for(int i = 0; i < pred.size; i++){
-                // Add small epsilon to avoid log(0)
-                float p = std::max(std::min(pred(i), 1.0f - 1e-15f), 1e-15f);
-                loss -= actual(i) * std::log(p) + (1.0f - actual(i)) * std::log(1.0f - p);
-            }
-            return loss;
-        }
-        static vec<float> cross_entropy_deriv(const vec<float> &pred, const vec<float> &actual){
-            vec<float> error(pred.size);
-            for(int i = 0; i < pred.size; i++){
-                // Add small epsilon to avoid division by zero
-                float p = std::max(std::min(pred(i), 1.0f - 1e-15f), 1e-15f);
-                error(i) = (p - actual(i)) / (p * (1.0f - p));
-            }
-            return error;
-        }
-        //softmax
-        static float softmax(const vec<float> &pred, const vec<float> &actual){
-            float loss = 0.0f;
-            for(int i = 0; i < pred.size; i++){
-                loss -= actual(i) * std::log(std::max(pred(i), 1e-15f));
-            }
-            return loss;
-        }
-        static vec<float> softmax_deriv(const vec<float> &pred, const vec<float> &actual){
-            vec<float> error(pred.size);
-            for(int i = 0; i < pred.size; i++){
-                error(i) = pred(i) - actual(i);
-            }
-            return error;
-        };
-        static float hinge(const vec<float> &pred, const vec<float> &actual){
-            float loss = 0.0f;
-            for(int i = 0; i < pred.size; i++){
-                loss += std::max(0.0f, 1.0f - actual(i) * pred(i));
-            }
-            return loss/pred.size;
-        };
-        static vec<float> hinge_deriv(const vec<float> &pred, const vec<float> &actual){
-            vec<float> error(pred.size);
-            for(int i = 0; i < pred.size; i++){
-                error(i) = (actual(i) * pred(i) < 1) ? -actual(i) : 0;
-            }
-            return error;
-        };
-        float (*loss_funcs[5])(const vec<float>&, const vec<float>&) = {mse, mae, cross_entropy, softmax, hinge};
-        vec<float> (*loss_deriv[5])(const vec<float>&, const vec<float>&) = {mse_deriv, mae_deriv, cross_entropy_deriv, softmax_deriv, hinge_deriv};
-        int call =0;
-    public:
-        loss_function(std::string name){
-            if(name == "mse"){
-                call = 0;
-            }else if(name == "mae"){
-                call = 1;
-            }else if(name == "cross_entropy"){
-                call = 2;
-            }else if(name == "softmax"){
-                call = 3;
-            }else if(name == "hinge"){
-                call = 4;
-            }else{
-                call = 0;
-            }
-        }
-        inline float operator()(vec<float> &pred, vec<float> &actual){
-            return loss_funcs[call](pred, actual);
-        };
-        inline vec<float> deriv(vec<float> &pred, vec<float> &actual){
-            return loss_deriv[call](pred, actual);
-        };
-        inline vec<float> operator()(matrix<float> &pred, matrix<float> &actual){
-            vec<float> result(pred.row);
-            for(int i = 0; i < pred.row; i++){
-                result(i) = loss_funcs[call](pred.get_row(i), actual.get_row(i));
-            }
-            return result;
-        };
-        inline matrix<float> deriv(matrix<float> &pred, matrix<float> &actual){
-            matrix<float> result(pred.row, pred.col);
-            for(int i = 0; i < pred.row; i++){
-                result.set_row(i, loss_deriv[call](pred.get_row(i), actual.get_row(i)));
-            }
-            return result;
-        };
-        std::string get_name() {
-            switch (call) {
-                case 0: return "mse";
-                case 1: return "mae";
-                case 2: return "cross_entropy";
-                case 3: return "softmax";
-                case 4: return "hinge";
-                default: return "unknown";
-            }
-        }
-};
-*/
 
 class act_func_vec{
     private:
@@ -296,7 +82,6 @@ class act_func_vec{
         vec<float> (*act_funcs[5])(vec<float>&)={relu, leaky_relu, sigmoid, softmax, linear};
         vec<float> (*act_derivs[5])(vec<float>&)={relu_deriv, leaky_relu_deriv, sigmoid_deriv, softmax_deriv, linear_deriv};
     public:
-    
         vec<float> operator()(vec<float> &v, int call){
             return act_funcs[call](v);
         }
@@ -305,667 +90,335 @@ class act_func_vec{
         }
 };
 
+class layer{
+    public:
+    virtual ~layer() noexcept = default;
+    virtual vec<float> forward(const vec<float>& input) = 0;
+    virtual vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) = 0;
+    virtual vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) = 0;
+    virtual vec<float> update_params(float learning_rate) = 0;
+    virtual int get_output_size() const = 0;
+};
 
-
-
-
-class loss_func_deriv{
-    private:
-        static vec<float> mse_deriv(vec<float> &pred, vec<float> &actual){
-            vec<float> error = 2*(pred - actual);
-            return error;
+void init_mat(matrix<float> &mat){
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    // Use He initialization for better training with ReLU/LeakyReLU
+    float scale = sqrt(2.0f / mat.row);
+    std::normal_distribution<float> dist(0.0f, scale);
+    
+    for (int i = 0; i < mat.row; i++) {
+        for (int j = 0; j < mat.col; j++) {
+            mat(i, j) = dist(gen);
         }
-        static vec<float> cross_entropy_deriv(vec<float> &pred, vec<float> &actual){
-            vec<float> deriv(pred.size);
-            deriv = pred - actual;
-            for(int i = 0; i < pred.size; i++){
-                deriv(i) = deriv(i) / (pred(i) * (1 - pred(i)) + 1e-15f);
-            }
-            return deriv;
+    }
+}
+
+void init_vec(vec<float> &vec){
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::normal_distribution<float> dist(0.0f, 0.1f);
+    
+    for (int i = 0; i < vec.size; i++) {
+        // Initialize biases with small positive values to help with activation
+        vec(i) = 0.01f + dist(gen) * 0.1f;
+    }
+}
+
+
+class dense_layer : public layer{
+    public:
+    int input_size;
+    int output_size;
+    matrix<float> weights;
+    vec<float> bias;
+    vec<float> input;
+    vec<float> output;
+    vec<float> preactivation;
+    vec<float> delta;
+    int call;
+    act_func_vec act_func;
+    
+    virtual ~dense_layer() noexcept = default;
+    
+    dense_layer(int input_size, int output_size, std::string activation_func){
+        this->input_size = input_size;
+        this->output_size = output_size;
+        weights = matrix<float>(output_size, input_size);
+        bias = vec<float>(output_size);
+        input = vec<float>(input_size);
+        output = vec<float>(output_size);
+        preactivation = vec<float>(output_size);
+        delta = vec<float>(output_size);
+        if(activation_func == "relu"){
+            call = 0;
         }
-        vec<float> (*loss_derivs[2])(vec<float>&, vec<float>&)={mse_deriv, cross_entropy_deriv};
-        int call = 0;
-        public:
-            loss_func_deriv(std::string name){
-                if(name == "mse"){
-                    call = 0;
-                }else if(name == "cross_entropy"){
-                    call = 1;
-                }
+        else if(activation_func == "leaky_relu"){
+            call = 1;
+        }
+        else if(activation_func == "sigmoid"){
+            call = 2;
+        }
+        else if(activation_func == "softmax"){
+            call = 3;
+        }
+        else if(activation_func == "linear"){
+            call = 4;
+        }
+        else{
+            throw std::invalid_argument("Invalid activation function");
+        }
+        init_mat(weights);
+        init_vec(bias);
+    }
+
+    vec<float> forward(const vec<float>& in) override {
+        input = in;  // Store input for backprop
+        
+        // Matrix-vector multiplication for forward pass
+        preactivation = weights*input + bias;
+        
+        // Apply activation function
+        vec<float> preact_copy = preactivation; // Copy to avoid modifying preactivation
+        output = act_func(preact_copy, call);
+        
+        return output;
+    }
+    
+    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
+        delta = transpose(prev_weight)*prev_delta;
+        delta = element_mult(delta, act_func.deriv(preactivation, call));
+        return delta;
+    }
+    
+    vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
+        delta = output - actual;
+        if(!(loss_func == "cross_entropy")){
+            delta = element_mult(delta, act_func.deriv(preactivation, call));
+        }
+        return delta;
+    }
+    
+    vec<float> update_params(float learning_rate) override {
+        // Compute weight updates using gradient descent
+        matrix<float> weight_update = outer_product(delta, input);
+        
+        // Apply updates
+        for(int i = 0; i < weights.row; i++) {
+            for(int j = 0; j < weights.col; j++) {
+                weights(i, j) -= learning_rate * weight_update(i, j);
             }
-            vec<float> operator()(vec<float> &pred, vec<float> &actual){
-                return loss_derivs[call](pred, actual);
-            }
-            vec<float> deriv(vec<float> &pred, vec<float> &actual){
-                return loss_derivs[call](pred, actual);
-            }
-            std::string get_name(){
-                switch(call){
-                    case 0: return "mse";
-                    case 1: return "cross_entropy";
-                    default: return "unknown";
-                }
-            }
-            
+        }
+        
+        // Update biases
+        for(int i = 0; i < bias.size; i++) {
+            bias(i) -= learning_rate * delta(i);
+        }
+        
+        return vec<float>(input_size);
+    }
+    
+    int get_output_size() const override {
+        return output_size;
+    }
 };
 
 
-//changing nn_linear_double to just store weights, bias, and an in to call act functions
-
-//I need to change this to be a fully matrix based approach, which is going to a pita
-//this means that outputs are going to be in the for std::vector<matrix<float>> rather than vectors
-//also need to update the back propagation and seriously work on making sure the math matches
-//This might be generally faster than the way I doing it currently
-class NeuralNetwork {
-private:
-    std::vector<vec<float>> outputs;
-    std::vector<vec<float>> preactivation;
-    std::vector<matrix<float>> weights;
-    std::vector<vec<float>> biases;
-    std::vector<int> calls;
-    int layer_count = 0;
-    int input_size;
-    int output_size;
+class NeuralNetwork{
+    private:
+    std::vector<std::unique_ptr<layer>> layers;
+    std::string loss_func;
     float learning_rate;
     int epochs;
-    act_func_vec fn;
-    loss_func_deriv loss;  // Use the loss_function class
-    inline void init_mat(matrix<float> &mat, float scale){
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, scale);
-        for(int i =0; i < mat.row; i++){
-            for(int j =0; j < mat.col; j++){
-                mat(i,j) = dist(gen);
-            }
-        }
-    };
-    void init_vec(vec<float> &vec, float scale){
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, scale);
-        for(int i=0; i<vec.size; i++){
-            vec(i) = dist(gen);
-        }
-    };
-public:
-    // Constructor with layer sizes and training parameters
-    NeuralNetwork(int nun_input, float lr = 0.01f, int num_epochs = 100, std::string loss_func = "mse") 
-        : input_size(nun_input), learning_rate(lr), epochs(num_epochs), loss(loss_func) {
-        };
-        
-    void add_layer(int num_nodes, std::string activation = "leaky_relu", bool is_last = true) {
+    public:
 
-        if (num_nodes <= 0) {
-            std::cerr << "Error: Number of nodes must be positive" << std::endl;
-            return;
-        }
-
-        // For the first layer, use input_size as the input dimension
-        int input_dim = (layer_count == 0) ? input_size : output_size;
-
-        // Create weight matrix: (num_nodes x input_dim)
-        matrix<float> tempm(num_nodes, input_dim);
-
-        float weight_scale = std::sqrt(2.0f / input_dim);
-        init_mat(tempm, weight_scale);
-        weights.push_back(tempm);
-        
-        // Create bias vector: (num_nodes)
-        vec<float> tempv(num_nodes);
-        
-        init_vec(tempv, 0.01f);
-        biases.push_back(tempv);
-        
-        // For the first layer, we need to add the input vector to outputs and preactivation
-        if (layer_count == 0) {
-            outputs.push_back(vec<float>(input_size));
-            preactivation.push_back(vec<float>(input_size));
-        }
-        
-        // Add the output and preactivation vectors for this layer
-        outputs.push_back(vec<float>(num_nodes));
-        preactivation.push_back(vec<float>(num_nodes));
-        
-        // Set activation function
-        if (is_last && (loss.get_name() == "cross_entropy")) {
-            calls.push_back(2);  
-        } else if(activation == "leaky_relu") {
-            calls.push_back(1);
-        } else if(activation == "sigmoid") {
-            calls.push_back(2);
-        } else {
-            calls.push_back(0);  // Default to ReLU
-        }
-        
-        // Update dimensions for next layer
-        output_size = num_nodes;
-        layer_count++;
-        std::cout << "Debug: Updated output size: " << output_size << std::endl;
-        std::cout << "Debug: Updated layer count: " << layer_count << std::endl;
+    NeuralNetwork(std::string loss_func, float learning_rate, int epochs): loss_func(loss_func), learning_rate(learning_rate), epochs(epochs){
     }
-    //I need to write a version of foward such that, it supports batch sizes, I need to figure out on whether I want to store preactivation
-    // Forward pass through all layers
-    vec<float> forward(vec<float>& input) {
-        
-        if (input.size != input_size) {
-            std::cerr << "Error: Input size mismatch. Expected " << input_size << ", got " << input.size << std::endl;
-            return vec<float>(0);
+    void add_layer(std::string layer_type, std::string activation_func, int input_size_x, int output_size_x, int input_size_y = 0, int output_size_y = 0, int input_size_z = 0, int output_size_z = 0){
+        if(layer_type == "dense"){
+            layers.push_back(std::make_unique<dense_layer>(input_size_x, output_size_x, activation_func));
         }
+    }
+    
+    vec<float> forward(const vec<float>& input){
+        vec<float> current_input = input;
+        for(auto& layer : layers){
+            current_input = layer->forward(current_input);
+        }
+        return current_input;
+    }
+    
+    void backpropagation(const vec<float>& input, const vec<float>& actual, std::string loss_func, float learning_rate){
+        // Forward pass to ensure all layers have calculated their outputs
+        forward(input);
         
-        outputs[0] = input;
+        // If no layers, do nothing
+        if (layers.empty()) return;
         
-        for(int i = 0; i < layer_count; i++) {
+        // Calculate gradient for the last layer
+        vec<float> delta = layers.back()->calc_gradient_last(actual, loss_func);
+        
+        // Backpropagate through the remaining layers
+        for (int i = layers.size() - 2; i >= 0; i--) {
+            // Get weights from the next layer
+            dense_layer* next_layer = dynamic_cast<dense_layer*>(layers[i + 1].get());
+            if (!next_layer) continue;
             
-            preactivation[i] = weights[i] * outputs[i] + biases[i];
-            sanitize_vec(preactivation[i]);
-            outputs[i+1] = fn(preactivation[i], calls[i]);
-            sanitize_vec(outputs[i+1]);
-        }
-        return outputs.back();
-    }
-    // Backward pass through all layers
-    void backward(vec<float>& target) {
-        if (target.size != outputs.back().size) {
-            std::cerr << "Error: Target size mismatch. Expected " << outputs.back().size 
-                      << ", got " << target.size << std::endl;
-            return;
+            // Backpropagate delta through previous layers
+            delta = layers[i]->calc_gradient(delta, next_layer->weights);
         }
         
-        // Calculate loss derivative
-        vec<float> loss_deriv = loss.deriv(outputs.back(), target);
-        vec<float> act_deriv = fn.deriv(outputs[layer_count], calls.back());
-        vec<float> delta = element_mult(loss_deriv, act_deriv);
-        // Calculate partial derivative matrix
-        matrix<float> partial = outer_product(delta, outputs[layer_count-1]);
-        
-        // Update weights and biases for the last layer
-        weights[layer_count-1] = weights[layer_count-1] - learning_rate*(partial);
-        biases[layer_count-1] = biases[layer_count-1] - learning_rate*(delta);
-        
-        // Backpropagate through remaining layers
-        for(int i = layer_count-2; i >= 0; i--) {
-            // Calculate new delta with proper size checks
-            vec<float> weight_delta = transpose(weights[i+1])*delta;
-            vec<float> act_deriv_i = fn.deriv(preactivation[i], calls[i]);
-            delta = element_mult(weight_delta, act_deriv_i);
-            // Calculate partial derivative matrix
-            partial = outer_product(delta, outputs[i]);
-            
-            // Update weights and biases
-            weights[i] = weights[i] - learning_rate*(partial);
-            biases[i] = biases[i] - learning_rate*(delta);
+        // Update parameters for all layers
+        for (auto& layer : layers) {
+            layer->update_params(learning_rate);
         }
     }
-
-    // Train the network on a dataset
-    void train(vecs<float>& inputs, vecs<float>& targets, int num_epochs = -1) {
-        if(num_epochs < 0) num_epochs = epochs;
-        if(inputs.num_of_vecs() != targets.num_of_vecs()) {
-            std::cerr << "Error: Number of inputs and targets must match" << std::endl;
-            return;
+    
+    // Simplified training method for single examples
+    void train(const vec<float>& input, const vec<float>& target) {
+        for (int epoch = 0; epoch < epochs; epoch++) {
+            backpropagation(input, target, loss_func, learning_rate);
         }
+    }
+    
+    // Batch training method for multiple examples
+    void train(const vecs<float>& inputs, const vecs<float>& targets) {
         int num_samples = inputs.num_of_vecs();
-        float reg_lambda = 0.0001f;
-        for(int epoch = 0; epoch < num_epochs; epoch++) {
-            for(int idx = 0; idx < num_samples; idx++) {
-                forward(inputs(idx));
-                backward(targets(idx));
-                for(int i = 0; i < layer_count; i++) {
-                    weights[i] = weights[i] * (1.0f - learning_rate * reg_lambda);
-                }
-            }
-        }
-    }
-
-    //start the template for adam.
-    void backward_adam(vec<float>& target, std::vector<vec<float>>& m_biases, std::vector<matrix<float>>& m_weights, 
-                       std::vector<vec<float>>& v_biases, std::vector<matrix<float>>& v_weights, 
-                       int t, float beta1, float beta2, float epsilon) {
         
-        // Calculate initial delta for output layer
-        vec<float> delta = element_mult(loss.deriv(outputs.back(), target), fn.deriv(preactivation.back(), calls.back()));
-        
-        // Update for the output layer
-        matrix<float> weight_grad = outer_product(delta, outputs[layer_count-1]);
-        
-        // Update moment estimates for the last layer
-        m_weights[layer_count-1] = beta1 * m_weights[layer_count-1] + (1.0f - beta1) * weight_grad;
-        m_biases[layer_count-1] = beta1 * m_biases[layer_count-1] + (1.0f - beta1) * delta;
-        
-        v_weights[layer_count-1] = beta2 * v_weights[layer_count-1] + (1.0f - beta2) * hadamard(weight_grad, weight_grad);
-        v_biases[layer_count-1] = beta2 * v_biases[layer_count-1] + (1.0f - beta2) * element_mult(delta, delta);
-        
-        // Bias correction
-        matrix<float> m_weights_corrected = m_weights[layer_count-1] * (1/(1.0f - std::pow(beta1, t)));
-        vec<float> m_biases_corrected = m_biases[layer_count-1] * (1/(1.0f - std::pow(beta1, t)));
-        
-        matrix<float> v_weights_corrected = v_weights[layer_count-1] * (1/(1.0f - std::pow(beta2, t)));
-        vec<float> v_biases_corrected = v_biases[layer_count-1] * (1/(1.0f - std::pow(beta2, t)));
-        
-        // Apply Adam update
-        for(int i = 0; i < weights[layer_count-1].row; i++) {
-            for(int j = 0; j < weights[layer_count-1].col; j++) {
-                weights[layer_count-1](i,j) -= learning_rate * m_weights_corrected(i,j) / (std::sqrt(v_weights_corrected(i,j)) + epsilon);
-            }
-            biases[layer_count-1](i) -= learning_rate * m_biases_corrected(i) / (std::sqrt(v_biases_corrected(i)) + epsilon);
-        }
-        
-        // Backpropagate through remaining layers
-        for(int i = layer_count-2; i >= 0; i--) {
-            // Calculate new delta
-            vec<float> weight_delta = transpose(weights[i+1]) * delta;
-            vec<float> act_deriv_i = fn.deriv(preactivation[i], calls[i]);
-            delta = element_mult(weight_delta, act_deriv_i);
+        for (int epoch = 0; epoch < epochs; epoch++) {
+            float total_error = 0.0f;
             
-            // Calculate gradients
-            matrix<float> weight_grad = outer_product(delta, outputs[i]);
-            
-            // Update moment estimates
-            m_weights[i] = beta1 * m_weights[i] + (1.0f - beta1) * weight_grad;
-            m_biases[i] = beta1 * m_biases[i] + (1.0f - beta1) * delta;
-            
-            v_weights[i] = beta2 * v_weights[i] + (1.0f - beta2) * hadamard(weight_grad, weight_grad);
-            v_biases[i] = beta2 * v_biases[i] + (1.0f - beta2) * element_mult(delta, delta);
-            
-            // Bias correction
-            matrix<float> m_weights_corrected = m_weights[i] * (1/(1.0f - std::pow(beta1, t)));
-            vec<float> m_biases_corrected = m_biases[i] * (1/(1.0f - std::pow(beta1, t)));
-            
-            matrix<float> v_weights_corrected = v_weights[i] * (1/(1.0f - std::pow(beta2, t)));
-            vec<float> v_biases_corrected = v_biases[i] * (1/(1.0f - std::pow(beta2, t)));
-            
-            // Apply Adam update
-            for(int j = 0; j < weights[i].row; j++) {
-                for(int k = 0; k < weights[i].col; k++) {
-                    weights[i](j,k) -= learning_rate * m_weights_corrected(j,k) / (std::sqrt(v_weights_corrected(j,k)) + epsilon);
-                }
-                biases[i](j) -= learning_rate * m_biases_corrected(j) / (std::sqrt(v_biases_corrected(j)) + epsilon);
-            }
-        }
-    }
-
-    void train_adam(vecs<float>& inputs, vecs<float>& targets, float beta1 = 0.9f, float beta2 = 0.999f, int num_epochs = -1) {
-        if(num_epochs < 0) num_epochs = epochs;
-        if(inputs.num_of_vecs() != targets.num_of_vecs()) {
-            std::cerr << "Error: Number of inputs and targets must match" << std::endl;
-            return;
-        }
-        
-        int num_samples = inputs.num_of_vecs();
-        const float epsilon = 1e-8f;
-        
-        // Initialize momentum and velocity vectors for weights and biases
-        std::vector<matrix<float>> m_weights(layer_count);
-        std::vector<vec<float>> m_biases(layer_count);
-        std::vector<matrix<float>> v_weights(layer_count);
-        std::vector<vec<float>> v_biases(layer_count);
-        
-        // Initialize moment estimates to zeros
-        for(int i = 0; i < layer_count; i++) {
-            m_weights[i] = matrix<float>(weights[i].row, weights[i].col);
-            m_biases[i] = vec<float>(biases[i].size);
-            v_weights[i] = matrix<float>(weights[i].row, weights[i].col);
-            v_biases[i] = vec<float>(biases[i].size);
-        }
-        
-        // Training loop
-        for(int epoch = 0; epoch < num_epochs; epoch++) {
-            //float total_loss = 0.0f;
-            
-            for(int idx = 0; idx < num_samples; idx++) {
-                // Forward pass
-                forward(inputs(idx));
+            // Train on each example in the batch
+            for (int i = 0; i < num_samples; i++) {
+                vec<float> input = inputs(i);
+                vec<float> target = targets(i);
                 
-                // Compute loss if needed for reporting
-                // total_loss += loss(outputs.back(), targets(idx));
+                // Forward pass to calculate current error
+                vec<float> prediction = forward(input);
                 
-                // Apply Adam optimization
-                int t = epoch * num_samples + idx + 1; // timestep (1-indexed for proper bias correction)
-                backward_adam(targets(idx), m_biases, m_weights, v_biases, v_weights, t, beta1, beta2, epsilon);
+                // Calculate error based on loss function
+                float sample_error = 0.0f;
+                if (loss_func == "cross_entropy") {
+                    // Binary cross-entropy loss
+                    for (int j = 0; j < prediction.size; j++) {
+                        // Clip values to avoid log(0)
+                        float pred_j = std::max(std::min(prediction(j), 0.9999f), 0.0001f);
+                        sample_error -= (target(j) * log(pred_j) + (1.0f - target(j)) * log(1.0f - pred_j));
+                    }
+                } else {
+                    // Mean squared error
+                    vec<float> error_vec = target - prediction;
+                    for (int j = 0; j < error_vec.size; j++) {
+                        sample_error += error_vec(j) * error_vec(j);  // Sum of squared errors
+                    }
+                }
+                total_error += sample_error;
+                
+                // Actual backpropagation
+                backpropagation(input, target, loss_func, learning_rate);
             }
             
-            // Optional: Print progress every few epochs
-            // if((epoch + 1) % 100 == 0) {
-            //     std::cout << "Epoch " << (epoch + 1) << "/" << num_epochs 
-            //               << ", Loss: " << (total_loss / num_samples) << std::endl;
-            // }
+            // Calculate average error
+            float avg_error = total_error / num_samples;
+            
+            // Print progress every 1000 epochs
+            if (epoch % 10 == 0) {
+                std::cout << "Epoch " << epoch << "/" << epochs << " - Error: " << avg_error << std::endl;
+            }
         }
     }
 
-    void evaluate_model(vecs<float>& inputs, vecs<float>& targets){
-        if(inputs.num_of_vecs() != targets.num_of_vecs()) {
-            std::cerr << "Error: Number of inputs and targets must match" << std::endl;
+    // Function to evaluate the model performance
+    void evaluate_model(const vecs<float>& inputs, const vecs<float>& targets) {
+        int num_samples = inputs.num_of_vecs();
+        if (num_samples != targets.num_of_vecs()) {
+            std::cerr << "Error: Number of input samples (" << num_samples 
+                      << ") does not match number of target samples (" << targets.num_of_vecs() 
+                      << ")" << std::endl;
             return;
         }
-        
-        int num_samples = inputs.num_of_vecs();
-        int num_classes = targets(0).size;
-        
-        // Vectors to store actual class indices and predicted class indices
-        vec<float> actual_classes(num_samples);
-        vec<float> predicted_classes(num_samples);
-        
-        // For each sample
-        for(int i = 0; i < num_samples; i++) {
-            // Forward pass
-            vec<float> prediction = forward(inputs(i));
-            
-            // Find the actual class (index with 1 in the one-hot encoded target)
-            int actual_class = 0;
-            for(int j = 0; j < targets(i).size; j++) {
-                if(targets(i)(j) > 0.5) {
-                    actual_class = j;
-                    break;
+        if (num_samples == 0) {
+            std::cout << "Evaluation dataset is empty." << std::endl;
+            return;
+        }
+
+        float total_loss = 0.0f;
+        int correct_predictions = 0;
+
+        for (int i = 0; i < num_samples; ++i) {
+            vec<float> input = inputs(i);
+            vec<float> target = targets(i);
+            vec<float> prediction = forward(input);
+
+            // Calculate loss for the sample
+            float sample_loss = 0.0f;
+            if (loss_func == "cross_entropy") {
+                // Binary/Categorical cross-entropy loss
+                for (int j = 0; j < prediction.size; ++j) {
+                    // Clip values to avoid log(0) or log(1) issues
+                    float pred_j = std::max(std::min(prediction(j), 1.0f - 1e-7f), 1e-7f);
+                    // Check if target is binary (size 1) or one-hot encoded
+                    if (target.size == 1) { 
+                        sample_loss -= (target(0) * log(pred_j) + (1.0f - target(0)) * log(1.0f - pred_j));
+                    } else { // Assuming one-hot encoded target
+                         sample_loss -= target(j) * log(pred_j); // Simplified for one-hot
+                    }
                 }
+                 if (target.size == 1 && prediction.size > 1) { // Handle binary case with multi-output sigmoid separately if needed
+                     // This part might need adjustment based on specific binary classification setup
+                     // Assuming first output neuron corresponds to the positive class probability for binary case
+                     float pred_0 = std::max(std::min(prediction(0), 1.0f - 1e-7f), 1e-7f);
+                     sample_loss = -(target(0) * log(pred_0) + (1.0f - target(0)) * log(1.0f - pred_0));
+                 }
+
+            } else { // Defaulting to Mean Squared Error
+                vec<float> error_vec = target - prediction;
+                for (int j = 0; j < error_vec.size; ++j) {
+                    sample_loss += error_vec(j) * error_vec(j);
+                }
+                sample_loss /= error_vec.size; // Average squared error
             }
-            
-            // Find the predicted class (index with highest probability)
+            total_loss += sample_loss;
+
+            // Calculate accuracy (assuming classification)
+            // Find index of max value in prediction and target (for one-hot encoding)
             int predicted_class = 0;
-            float max_prob = prediction(0);
-            for(int j = 1; j < prediction.size; j++) {
-                if(prediction(j) > max_prob) {
-                    max_prob = prediction(j);
+            float max_pred = prediction(0);
+            for(int j = 1; j < prediction.size; ++j) {
+                if (prediction(j) > max_pred) {
+                    max_pred = prediction(j);
                     predicted_class = j;
                 }
             }
-            
-            // Store the class indices
-            actual_classes(i) = actual_class;
-            predicted_classes(i) = predicted_class;
-        }
-        
-        // Create confusion matrix and display metrics
-        sm::ConfusionMatrix<float> confusion_matrix(actual_classes, predicted_classes);
-        
-        // Display metrics
-        std::cout << "\nNeural Network Evaluation Results:" << std::endl;
-        std::cout << "--------------------------------" << std::endl;
-        std::cout << "Accuracy:  " << confusion_matrix.get_accuracy() * 100 << "%" << std::endl;
-        std::cout << "Precision: " << confusion_matrix.get_precision() * 100 << "%" << std::endl;
-        std::cout << "Recall:    " << confusion_matrix.get_recall() * 100 << "%" << std::endl;
-        std::cout << "F1 Score:  " << confusion_matrix.get_f1_score() * 100 << "%" << std::endl;
-    }
-    
-};
+
+            int target_class = 0;
+             if (target.size == 1) { // Binary classification target (0 or 1)
+                 target_class = static_cast<int>(round(target(0)));
+                 // Adjust prediction logic for binary sigmoid output if needed
+                 // Often comparing prediction(0) > 0.5 threshold
+                 predicted_class = (prediction(0) > 0.5f) ? 1 : 0; 
+             } else { // One-hot encoded target
+                 float max_target = target(0);
+                 for(int j = 1; j < target.size; ++j) {
+                     if (target(j) > max_target) { // Find the index of the '1'
+                         max_target = target(j);
+                         target_class = j;
+                     }
+                 }
+             }
 
 
-/*
-class BatchNeuralNetwork {
-private:
-    std::vector<matrix<float>> outputs;
-    std::vector<matrix<float>> preactivation;
-    std::vector<matrix<float>> weights;
-    std::vector<vec<float>> biases;
-    std::vector<int> calls;
-    int layer_count = 0;
-    int input_size;
-    int output_size;
-    float learning_rate;
-    int epochs;
-    bool use_softmax;
-    float last_error = 0;
-    activation_functions fn;
-    loss_function loss;
-    int batch_size;
-
-    inline void init_mat(matrix<float> &mat, float scale) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, scale);
-        for(int i = 0; i < mat.row; i++) {
-            for(int j = 0; j < mat.col; j++) {
-                mat(i,j) = dist(gen);
+            if (predicted_class == target_class) {
+                correct_predictions++;
             }
         }
-    }
 
-    void init_vec(vec<float> &vec, float scale) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<float> dist(0.0f, scale);
-        for(int i = 0; i < vec.size; i++) {
-            vec(i) = dist(gen);
-        }
-    }
+        float average_loss = total_loss / num_samples;
+        float accuracy = static_cast<float>(correct_predictions) / num_samples;
 
-    inline void apply_softmax(matrix<float> &m, bool row_major = false) {
-        if (row_major) {
-            // Row-wise softmax
-            for(int i = 0; i < m.row; i++) {
-                float max_val = m(i,0);
-                for(int j = 1; j < m.col; j++) {
-                    if(m(i,j) > max_val) max_val = m(i,j);
-                }
-                
-                float sum = 0.0f;
-                for(int j = 0; j < m.col; j++) {
-                    m(i,j) = exp(m(i,j) - max_val);
-                    sum += m(i,j);
-                }
-                
-                for(int j = 0; j < m.col; j++) {
-                    m(i,j) /= sum;
-                    sanitize(m(i,j));
-                }
-            }
-        } else {
-            // Column-wise softmax
-            for(int j = 0; j < m.col; j++) {
-                float max_val = m(0,j);
-                for(int i = 1; i < m.row; i++) {
-                    if(m(i,j) > max_val) max_val = m(i,j);
-                }
-                
-                float sum = 0.0f;
-                for(int i = 0; i < m.row; i++) {
-                    m(i,j) = exp(m(i,j) - max_val);
-                    sum += m(i,j);
-                }
-                
-                for(int i = 0; i < m.row; i++) {
-                    m(i,j) /= sum;
-                    sanitize(m(i,j));
-                }
-            }
-        }
-    }
-    void init_outputs_preactivation_mats(int size){
-        outputs.clear();
-        preactivation.clear();
-        outputs.push_back(matrix<float>(size, input_size));
-        preactivation.push_back(matrix<float>(size, input_size));
-        for(int i = 0; i < layer_count; i++){
-            outputs.push_back(matrix<float>(size, weights[i].row));
-            preactivation.push_back(matrix<float>(size, weights[i].row));
-        }
-    }
-    //this function partitions the inputs into batches, sinces matricies assume all the matricies have the same size, samples.num_of_vecs() % batch_size != 0, will return a matrix of the last batch
-    matrix<float> partition_inputs(vecs<float> &inputs, int batch_size, matricies<float> &batches){
-        int num_samples = inputs.num_of_vecs();
-        int num_full_batches = num_samples / batch_size;
-        int last_batch_size = num_samples % batch_size;
-        
-        // Create a new matricies object with the correct number of batches
-
-        matricies<float> new_batches(num_full_batches, batch_size, inputs.size());
-        
-        // Process full batches
-        for(int i = 0; i < num_full_batches; i++) {
-            int start_idx = i * batch_size;
-            int end_idx = start_idx + batch_size - 1;  // end_idx is inclusive
-            vecs<float> batch_vecs = inputs.subset(start_idx, end_idx);
-            matrix<float> batch_mat(batch_vecs, true);
-            new_batches(i) = batch_mat;
-        }
-        
-        // Handle the last partial batch if it exists
-        if(last_batch_size > 0) {
-            int start_idx = num_full_batches * batch_size;
-            int end_idx = num_samples - 1;  // end_idx is inclusive
-            vecs<float> last_batch_vecs = inputs.subset(start_idx, end_idx);
-            matrix<float> last_batch_mat(last_batch_vecs, true);
-            batches = new_batches;
-            return last_batch_mat;
-        }
-        
-        // If no partial batch, return empty matrix
-        batches = new_batches;
-        return matrix<float>(0, 0);
-    }
-public:
-    BatchNeuralNetwork(int num_input, float lr = 0.01f, int num_epochs = 100, 
-                      std::string loss_func = "mse", int batch = 32) 
-        : input_size(num_input), learning_rate(lr), epochs(num_epochs), 
-          loss(loss_func), batch_size(batch) {
-        use_softmax = (loss_func == "softmax" || loss_func == "cross_entropy");
-    }
-
-    void add_layer(int num_nodes, std::string activation = "leaky_relu", bool is_last = true) {
-        if (num_nodes <= 0) {
-            std::cerr << "Error: Number of nodes must be positive" << std::endl;
-            return;
-        }
-
-        int input_dim = (layer_count == 0) ? input_size : output_size;
-        
-        matrix<float> tempm(num_nodes, input_dim);
-        float weight_scale = std::sqrt(2.0f / input_dim);
-        init_mat(tempm, weight_scale);
-        weights.push_back(tempm);
-        
-        vec<float> tempv(num_nodes);
-        init_vec(tempv, 0.01f);
-        biases.push_back(tempv);
-        
-        if (is_last && (loss.get_name() == "softmax" || loss.get_name() == "cross_entropy")) {
-            calls.push_back(2);  // Use sigmoid for last layer in classification
-        } else if(activation == "leaky_relu") {
-            calls.push_back(1);
-        } else if(activation == "sigmoid") {
-            calls.push_back(2);
-        } else if(activation == "tanh") {
-            calls.push_back(3);
-        } else {
-            calls.push_back(0);  // Default to ReLU
-        }
-        
-        output_size = num_nodes;
-        layer_count++;
-    }
-            
-    matrix<float> forward(matrix<float>& input) {
-        if (input.row != input_size) {
-            std::cerr << "Error: Input matrix rows must match input_size. Expected " 
-                      << input_size << ", got " << input.row << std::endl;
-            return matrix<float>(0, 0);
-        }
-        outputs[0] = input;
-        for(int i = 0; i < layer_count; i++) {
-            preactivation[i] = weights[i] * outputs[i];
-            preactivation[i].add_per_col(biases[i]);
-            sanitize_mat(preactivation[i]);
-            outputs[i+1] = fn(preactivation[i], calls[i]);
-            sanitize_mat(outputs[i+1]);
-        }
-        if(use_softmax) {
-            apply_softmax(outputs.back(), false);
-        }
-        return outputs.back();
-    };
-
-    void backward(matrix<float>& target) {
-        matrix<float> delta = hadamard(loss.deriv(outputs.back(), target), fn.deriv(outputs[layer_count], calls.back()));
-        // Average gradients across the batch
-        vec<float> avg_delta(delta.row);
-        for(int j = 0; j < delta.row; j++) {
-            float sum = 0.0f;
-            for(int i = 0; i < delta.col; i++) {
-                sum += delta(j,i);
-            }
-            avg_delta(j) = sum / delta.col;
-        }
-        
-        matrix<float> partial = transpose(outputs[layer_count-1] * transpose(delta));
-        weights[layer_count-1] = weights[layer_count-1] - learning_rate * partial;
-        biases[layer_count-1] = biases[layer_count-1] - learning_rate * avg_delta;
-        for(int i = layer_count-2; i >= 0; i--) {
-            delta = hadamard(transpose(weights[i+1]) * delta, fn.deriv(preactivation[i], calls[i]));
-            // Average gradients across the batch
-            avg_delta = vec<float>(delta.row);
-            for(int j = 0; j < delta.row; j++) {
-                float sum = 0.0f;
-                for(int k = 0; k < delta.col; k++) {
-                    sum += delta(j,k);
-                }
-                avg_delta(j) = sum / delta.col;
-            }
-
-            partial = transpose(outputs[i] * transpose(delta));
-            weights[i] = weights[i] - learning_rate * partial;
-            biases[i] = biases[i] - learning_rate * avg_delta;
-        }
-    }
-
-    void train(vecs<float> inputs, vecs<float> targets, int num_epochs = -1) {
-        if(num_epochs < 0) num_epochs = epochs;
-        if(inputs.num_of_vecs() != targets.num_of_vecs()) {
-            std::cerr << "Error: Number of inputs and targets must match" << std::endl;
-            return;
-        }
-        
-        int num_samples = inputs.num_of_vecs();
-        if(num_samples == 0) {
-            std::cerr << "Error: No samples provided" << std::endl;
-            return;
-        }
-        matricies<float> batches;
-        matrix<float> last_batch = partition_inputs(inputs, batch_size, batches);
-        matricies<float> targets_batches;
-        matrix<float> last_target_batch = partition_inputs(targets, batch_size, targets_batches);
-        
-        for(int epoch = 0; epoch < num_epochs; epoch++){
-            if(batches.size() != 0){
-                init_outputs_preactivation_mats(batches.size());
-                for(int i = 0; i < batches.size(); i++){
-                    matrix<float> input = batches(i);
-                    matrix<float> target = targets_batches(i);
-                    forward(input);
-                    backward(target);
-                }
-            }
-            if(last_batch.row != 0){
-                init_outputs_preactivation_mats(inputs.num_of_vecs());
-                forward(last_batch);
-                backward(last_target_batch);
-            }
-        }
-    }
-
-    float calculate_batch_loss(matrix<float>& predictions, matrix<float>& targets) {
-        float total_loss = 0.0f;
-        for(int i = 0; i < predictions.row; i++) {
-            vec<float> pred_row = predictions.get_row(i);
-            vec<float> target_row = targets.get_row(i);
-            total_loss += loss(pred_row, target_row);
-        }
-        return total_loss / predictions.row;
+        std::cout << "Evaluation Results:" << std::endl;
+        std::cout << "  Average Loss: " << average_loss << std::endl;
+        std::cout << "  Accuracy: " << accuracy * 100.0f << "% (" 
+                  << correct_predictions << "/" << num_samples << ")" << std::endl;
     }
 };
-*/
-
-/*
-class conv2d_layer{
-    private:
-        int num_filters;
-        int filter_size;
-        int input_x;
-        int input_y;
-        int stride;
-        int padding = 0;
-    public:
-        matrix<float> discrete_colvolution(matrix<float> &input){
-            matrix<float> output();
-}
-}
-*/

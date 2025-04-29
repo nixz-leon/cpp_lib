@@ -69,6 +69,7 @@ class vec {
         }
         vec(const vec<T> &other);// copy
         vec<T>& operator=(vec<T>& other); //copy assigment
+        vec<T>& operator=(const vec<T>& other); // const copy assignment
         vec(vec<T> &&other) noexcept;//move
         vec<T>& operator=(vec<T>&& other) noexcept;// move assignment 
         vec<T>& operator=(std::initializer_list<T> list) {
@@ -390,7 +391,7 @@ class vec {
         }
         inline T sum(){
             T sum = 0;
-            for(int i =1; i < size; i++){
+            for(int i =0; i < size; i++){
                 sum+=data[i];
             }
             return sum;
@@ -413,6 +414,17 @@ vec<T>::vec(const vec<T> &other) {
 
 template <typename T>
 vec<T> &vec<T>::operator=(vec<T>& other) {
+    if (this != &other) {
+        delete[] data;
+        data = new T[other.size];
+        std::memcpy(data, other.data, sizeof(T) * other.size);
+        size = other.size;
+    }
+    return *this;
+}
+
+template <typename T>
+vec<T> &vec<T>::operator=(const vec<T>& other) {
     if (this != &other) {
         delete[] data;
         data = new T[other.size];
