@@ -96,7 +96,8 @@ class layer{
     virtual vec<float> forward(const vec<float>& input) = 0;
     virtual vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) = 0;
     virtual vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) = 0;
-    virtual vec<float> update_params(float learning_rate) = 0;
+    virtual void update_params(float learning_rate) = 0;
+    virtual matrix<float> get_weights() const = 0;
     virtual int get_output_size() const = 0;
 };
 
@@ -126,6 +127,284 @@ void init_vec(vec<float> &vec){
 }
 
 
+matrix<float> prep_vec(const vec<float>& image_vec, int image_width, int image_height, int filter_size, int stride, int padding) {
+    // Calculate dimensions
+    int num_submatrices_x = (image_width + 2 * padding - filter_size) / stride + 1;
+    int num_submatrices_y = (image_height + 2 * padding - filter_size) / stride + 1;
+    int total_submatrices = num_submatrices_x * num_submatrices_y;
+    
+    // Create the result matrix directly - each submatrix becomes a column
+    // Rows = filter_size * filter_size, Cols = total_submatrices
+    matrix<float> result(filter_size * filter_size, total_submatrices);
+    
+    // Check if we should use GPU acceleration
+    if (OpenCLAccelerator::isOpenCLAvailable() && 
+        OpenCLAccelerator::shouldUseGPU(total_submatrices * filter_size * filter_size)) {
+        
+        // Allocate result data
+        float* result_data = new float[total_submatrices * filter_size * filter_size];
+        
+        // Call the GPU implementation
+        bool success = OpenCLAccelerator::prepVecGPU(
+            image_vec.data, image_width, image_height, 
+            result_data, filter_size, stride, padding
+        );
+        
+        if (success) {
+            // Copy data from result_data to the matrix
+            // In the kernel, each submatrix is a contiguous block
+            // Need to transpose the data arrangement to get columns
+            for (int submatrix_idx = 0; submatrix_idx < total_submatrices; submatrix_idx++) {
+                for (int i = 0; i < filter_size; i++) {
+                    for (int j = 0; j < filter_size; j++) {
+                        // Source index in result_data
+                        int src_idx = submatrix_idx * (filter_size * filter_size) + i * filter_size + j;
+                        // Target index in result matrix (column-oriented)
+                        int tgt_idx = (i * filter_size + j) * total_submatrices + submatrix_idx;
+                        result.data[tgt_idx] = result_data[src_idx];
+                    }
+                }
+            }
+            
+            // Clean up the temporary array
+            delete[] result_data;
+            return result;
+        }
+        
+        // Fall back to CPU if GPU implementation failed
+        delete[] result_data;
+    }
+    
+    // CPU implementation - directly filling the matrix
+    int start_index_x = 0 - padding;
+    int start_index_y = 0 - padding;
+    
+    int submatrix_idx = 0;
+    for (int i = start_index_x; i + filter_size <= image_width + padding; i += stride) {
+        for (int j = start_index_y; j + filter_size <= image_height + padding; j += stride) {
+            // Process this submatrix directly into the appropriate column
+            for (int fi = 0; fi < filter_size; fi++) {
+                for (int fj = 0; fj < filter_size; fj++) {
+                    // Calculate original image coordinates
+                    int img_x = i + fi;
+                    int img_y = j + fj;
+                    
+                    // Value to store
+                    float value = 0.0f;
+                    
+                    // Check if within image bounds
+                    if (img_x >= 0 && img_x < image_width && img_y >= 0 && img_y < image_height) {
+                        value = image_vec(img_x * image_height + img_y);
+                    }
+                    
+                    // Store directly in the matrix at row (fi*filter_size+fj), column (submatrix_idx)
+                    result(fi * filter_size + fj, submatrix_idx) = value;
+                }
+            }
+            
+            submatrix_idx++;
+        }
+    }
+    return result;
+}
+
+
+
+
+/*
+class conv_layer : public layer{
+    private:
+    int input_size_x;
+    int input_size_y;
+    int output_size_x;
+    int output_size_y;
+    int filter_size;
+    int stride;
+    int padding;
+    matrix<float> weights;
+    vec<float> bias;
+    vec<float> input;
+    matrix<float> input_matrix;
+    vec<float> output;
+    vec<float> preactivation;
+    vec<float> delta;
+    int call;
+    act_func_vec act_func;
+
+    conv_layer(int input_size_x, int input_size_y, int output_size_x, int output_size_y, int num_of_filters, int filter_size, int stride, int padding, std::string activation_func){
+        this->input_size_x = input_size_x;
+        this->input_size_y = input_size_y;
+        this->output_size_x = output_size_x;
+        this->output_size_y = output_size_y;
+        this->num_of_filters = num_of_filters;
+        this->filter_size = filter_size;
+        this->stride = stride;
+        this->padding = padding;
+
+        // example weight matrix: 2 2x2 filters:
+        // f11 f12 f13 f14
+        // f21 f22 f23 f24
+        // this is equalivant to the filters:
+        // f11 f12
+        // f13 f13
+
+        // and: 
+        // f21 f22
+        // f23 f24
+
+        weights = matrix<float>(num_of_filters, filter_size*filter_size);
+        bias = vec<float>(num_of_filters);
+
+        int num_submatrices_x = (input_size_x + 2 * padding - filter_size) / stride + 1;
+        int num_submatrices_y = (input_size_y + 2 * padding - filter_size) / stride + 1;
+        int total_submatrices = num_submatrices_x * num_submatrices_y;
+        input_matrix = matrix<float>(filter_size*filter_size, total_submatrices);
+    }
+
+    vec<float> forward(const vec<float>& in) override {
+        input = in;
+        input_matrix = prep_vec(input, input_size_x, input_size_y, filter_size, stride, padding);
+        preactivation = weights*input_matrix;
+        preactivation = per_column_add(preactivation, bias);
+        output = act_func(preactivation, call);
+        return output;
+    }
+
+    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
+        delta = transpose(prev_weight)*prev_delta;
+        delta = element_mult(delta, act_func.deriv(preactivation, call));
+        return delta;
+    }
+    
+    void update_params(float learning_rate) override {
+        matrix<float> weight_update = transpose(input_matrix*delta);
+        weights = weights - learning_rate * weight_update;
+        bias = bias - learning_rate * delta;
+    }
+
+    int get_output_size() const override {
+        return output_size_x * output_size_y;
+    }
+    
+    matrix<float> get_weights() const override {
+        return weights;
+    }
+};
+*/
+
+class pool_layer : public layer{
+    public:
+    int input_size_x;
+    int input_size_y;
+    int output_size_x;
+    int output_size_y;
+    int pool_size;
+    int stride;
+    vec<float> input;
+    matrix<float> input_matrix;
+    vec<float> output;
+    vec<float> delta;
+    matrix<float> max_pool_weights;
+
+    vec<float> max_pool(matrix<float> &data){
+        vec<float> result(data.col);
+        // Create a weights matrix that transforms the original input vector to max pooled output
+        // For a 3x3 input with 2x2 pooling and stride 1, we get 4 regions
+        // The weights should be 4x9 (4 outputs x 9 input elements)
+        matrix<float> max_pool_weights(data.col, input_size_x * input_size_y);
+        
+        // Initialize weights to zero
+        for(int i = 0; i < max_pool_weights.row; i++) {
+            for(int j = 0; j < max_pool_weights.col; j++) {
+                max_pool_weights(i, j) = 0.0f;
+            }
+        }
+        
+        // Find the maximum value in each column (each pooling region)
+        for(int j = 0; j < data.col; j++) {
+            float max_val = data(0, j);
+            int max_idx = 0;
+            
+            // Check all values in this column (pooling region)
+            for(int i = 1; i < data.row; i++) {
+                if(data(i, j) > max_val) {
+                    max_val = data(i, j);
+                    max_idx = i;
+                }
+            }
+            
+            // Store the maximum value in the result
+            result(j) = max_val;
+            
+            // Now we need to map the max_idx in the input_matrix back to its original position
+            // in the input vector to place a 1 in the weights matrix
+            // Each column j in data represents a pooling region
+            // Calculate the starting point of this region in the original input
+            int region_row = (j / ((input_size_x - pool_size) / stride + 1)) * stride;
+            int region_col = (j % ((input_size_x - pool_size) / stride + 1)) * stride;
+            
+            // Calculate which position in the pooling window had the max value
+            int window_row = max_idx / pool_size;
+            int window_col = max_idx % pool_size;
+            
+            // Calculate the original index in the input
+            int orig_row = region_row + window_row;
+            int orig_col = region_col + window_col;
+            int orig_idx = orig_row * input_size_x + orig_col;
+            
+            // Place a 1 in the weight matrix where output j takes value from input orig_idx
+            max_pool_weights(j, orig_idx) = 1.0f;
+        }
+        
+        // Store the weights matrix for backpropagation
+        this->max_pool_weights = max_pool_weights;
+        
+        return result;
+    }
+
+    pool_layer(int input_size_x, int input_size_y, int output_size_x, int output_size_y, int pool_size, int stride){
+        this->input_size_x = input_size_x;
+        this->input_size_y = input_size_y;
+        this->output_size_x = output_size_x;
+        this->output_size_y = output_size_y;
+        this->pool_size = pool_size;
+        this->stride = stride;
+
+        int num_submatrices_x = (input_size_x - pool_size) / stride + 1;
+        int num_submatrices_y = (input_size_y - pool_size) / stride + 1;
+        int total_submatrices = num_submatrices_x * num_submatrices_y;
+        input_matrix = matrix<float>(pool_size*pool_size, total_submatrices);
+        output = vec<float>(total_submatrices);
+    }
+
+    vec<float> forward(const vec<float>& in) override {
+        input = in;
+        input_matrix = prep_vec(input, input_size_x, input_size_y, pool_size, stride, 0);
+        output = max_pool(input_matrix);
+        return output;
+    }
+
+    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
+        delta = transpose(prev_weight)*prev_delta;
+        return delta;
+    }
+
+    vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
+        // Pooling layers don't have trainable parameters, so this is a no-op
+    }
+    
+    void update_params(float learning_rate) override {
+        // Pooling layers don't have trainable parameters, so this is a no-op
+    }
+    
+    matrix<float> get_weights() const override {
+        return max_pool_weights;
+    }
+    
+    int get_output_size() const override {
+        return output_size_x * output_size_y;
+    }
+};
 class dense_layer : public layer{
     public:
     int input_size;
@@ -199,27 +478,19 @@ class dense_layer : public layer{
         return delta;
     }
     
-    vec<float> update_params(float learning_rate) override {
+    void update_params(float learning_rate) override {
         // Compute weight updates using gradient descent
-        matrix<float> weight_update = outer_product(delta, input);
-        
-        // Apply updates
-        for(int i = 0; i < weights.row; i++) {
-            for(int j = 0; j < weights.col; j++) {
-                weights(i, j) -= learning_rate * weight_update(i, j);
-            }
-        }
-        
-        // Update biases
-        for(int i = 0; i < bias.size; i++) {
-            bias(i) -= learning_rate * delta(i);
-        }
-        
-        return vec<float>(input_size);
+        matrix<float> weight_update = outer_product(delta, input);        
+        weights = weights - learning_rate * weight_update;
+        bias = bias - learning_rate * delta;
     }
     
     int get_output_size() const override {
         return output_size;
+    }
+    
+    matrix<float> get_weights() const override {
+        return weights;
     }
 };
 
@@ -260,12 +531,11 @@ class NeuralNetwork{
         
         // Backpropagate through the remaining layers
         for (int i = layers.size() - 2; i >= 0; i--) {
-            // Get weights from the next layer
-            dense_layer* next_layer = dynamic_cast<dense_layer*>(layers[i + 1].get());
-            if (!next_layer) continue;
+            // Get weights from the next layer using the new get_weights method
+            matrix<float> next_layer_weights = layers[i + 1]->get_weights();
             
             // Backpropagate delta through previous layers
-            delta = layers[i]->calc_gradient(delta, next_layer->weights);
+            delta = layers[i]->calc_gradient(delta, next_layer_weights);
         }
         
         // Update parameters for all layers
@@ -420,5 +690,60 @@ class NeuralNetwork{
         std::cout << "  Average Loss: " << average_loss << std::endl;
         std::cout << "  Accuracy: " << accuracy * 100.0f << "% (" 
                   << correct_predictions << "/" << num_samples << ")" << std::endl;
+    }
+
+    // Test function to verify max_pool operation with a specific example
+    void test_max_pool() {
+        // Example input [1,2,3,4,5,6,7,8,9] representing a 3×3 matrix
+        vec<float> input = {1,2,3,4,5,6,7,8,9};
+        int input_size_x = 3;
+        int input_size_y = 3;
+        int pool_size = 2;
+        int stride = 1;
+        
+        // Create a test pool layer
+        int output_size_x = 2;
+        int output_size_y = 2;
+        pool_layer test_layer(input_size_x, input_size_y, output_size_x, output_size_y, pool_size, stride);
+        
+        // Prepare the input for max pooling
+        matrix<float> input_matrix = prep_vec(input, input_size_x, input_size_y, pool_size, stride, 0);
+        
+        // The input_matrix should now have 4 columns (one for each pooling region)
+        // Each column should have 4 rows (one for each position in the 2x2 pooling window)
+        
+        // Expected pooling regions:
+        // Region 0: [1,2,4,5] -> max is 5
+        // Region 1: [2,3,5,6] -> max is 6
+        // Region 2: [4,5,7,8] -> max is 8
+        // Region 3: [5,6,8,9] -> max is 9
+        
+        // Perform max pooling
+        vec<float> output = test_layer.max_pool(input_matrix);
+        
+        // Expected output: [5,6,8,9]
+        std::cout << "Max pooling output: ";
+        for(int i = 0; i < output.size; i++) {
+            std::cout << output(i) << " ";
+        }
+        std::cout << std::endl;
+        
+        // Verify max_pool_weights matrix works
+        // Convert input_matrix to a vector to match how max_pool_weights expects input
+        
+        // Test that max_pool_weights * flattened_regions produces expected output
+        matrix<float> weights = test_layer.get_weights();
+        vec<float> check_output = weights * input;
+        
+        std::cout << "Weights matrix output for first region: " << check_output(0) << std::endl;
+        
+        // Print the max_pool_weights matrix
+        std::cout << "Max pooling weights matrix:" << std::endl;
+        for(int i = 0; i < weights.row; i++) {
+            for(int j = 0; j < weights.col; j++) {
+                std::cout << weights(i, j) << " ";
+            }
+            std::cout << std::endl;
+        }
     }
 };

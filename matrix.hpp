@@ -151,7 +151,7 @@ class matrix {
             vec<T> temp(a.col * a.row);
             for(int i = 0; i < a.col; i++){
                 for(int j = 0; j < a.row; j++){
-                    temp((i*a.row)+j) = a(j,i);
+                    temp((i*a.row)+j) = a(i,j);
                 }
             }
             return temp;
