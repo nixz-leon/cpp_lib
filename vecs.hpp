@@ -29,6 +29,8 @@ public:
     inline const vec<T>& back() const { return vectors[num_vecs-1]; };
     void printout();
     vecs<T> subset(int start_col, int end_col); // Subset function
+    vec<T> vectorize();
+    vec<T> vectorize() const;
 };
 
 // Default constructor
@@ -149,7 +151,27 @@ vecs<T> vecs<T>::subset(int start_index, int end_index) {
     return result;
 }
 
+template <class T>
+vec<T> vecs<T>::vectorize() {
+    vec<T> result(num_vecs * size_of_vecs);
+    for (int i = 0; i < num_vecs; i++) {
+        for (int j = 0; j < size_of_vecs; j++) {
+            result(i * size_of_vecs + j) = vectors[i](j);
+        }
+    }
+    return result;  
+}
 
+template <class T>
+vec<T> vecs<T>::vectorize() const {
+    vec<T> result(num_vecs * size_of_vecs);
+    for (int i = 0; i < num_vecs; i++) {
+        for (int j = 0; j < size_of_vecs; j++) {
+            result(i * size_of_vecs + j) = vectors[i](j);
+        }
+    }
+    return result;  
+}
 
 template <typename T>
     std::pair<vecs<T>, vecs<T>> train_test_split(vecs<T>& data, double test_size = 0.2) {

@@ -21,6 +21,7 @@ class matrix {
         matrix(vec<T> &vector, bool col_matrix = false);
         matrix(const matrix<T> &other);// copy
         matrix<T>& operator=(matrix<T>& other); //copy assigment
+        matrix<T>& operator=(const matrix<T>& other);
         matrix(matrix<T> &&other) noexcept;//move
         matrix<T>& operator=(matrix<T>&& other) noexcept;// move assignment 
         T& operator()(int row, int col);

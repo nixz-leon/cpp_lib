@@ -88,17 +88,80 @@ class act_func_vec{
         vec<float> deriv(vec<float> &v, int call){
             return act_derivs[call](v);
         }
+        vecs<float> operator()(vecs<float> &v, int call){
+            for(int i = 0; i < v.num_of_vecs(); i++){
+                v(i) = act_funcs[call](v(i));
+            }
+            return v;
+        }
+        vecs<float> deriv(vecs<float> &v, int call){
+            for(int i = 0; i < v.num_of_vecs(); i++){
+                v(i) = act_derivs[call](v(i));
+            }
+            return v;
+        }
+};
+
+class act_func_mat{
+    private:
+        static matrix<float> relu(matrix<float> &m){
+            matrix<float> result(m.row, m.col);
+            for(int i = 0; i < m.row; i++){
+                for(int j = 0; j < m.col; j++){
+                    result(i, j) = m(i, j) > 0 ? m(i, j) : 0;
+                }
+            }
+            return result;
+        }
+        static matrix<float> relu_deriv(matrix<float> &m){
+            matrix<float> result(m.row, m.col);
+            for(int i = 0; i < m.row; i++){
+                for(int j = 0; j < m.col; j++){
+                    result(i, j) = m(i, j) > 0 ? 1 : 0;
+                }
+            }
+            return result;
+        }
+        static matrix<float> leaky_relu(matrix<float> &m){
+            matrix<float> result(m.row, m.col);
+            for(int i = 0; i < m.row; i++){
+                for(int j = 0; j < m.col; j++){
+                    result(i, j) = m(i, j) > 0 ? m(i, j) : 0.01f*m(i, j);
+                }
+            }
+            return result;
+        }
+        static matrix<float> leaky_relu_deriv(matrix<float> &m){
+            matrix<float> result(m.row, m.col);
+            for(int i = 0; i < m.row; i++){
+                for(int j = 0; j < m.col; j++){
+                    result(i, j) = m(i, j) > 0 ? 1 : 0.01f;
+                }
+            }
+            return result;
+        }
+        
+        matrix<float> (*act_funcs[2])(matrix<float>&)={relu, leaky_relu};
+        matrix<float> (*act_derivs[2])(matrix<float>&)={relu_deriv, leaky_relu_deriv};
+    public:
+        matrix<float> operator()(matrix<float> &m, int call){
+            return act_funcs[call](m);
+        }
+        matrix<float> deriv(matrix<float> &m, int call){
+            return act_derivs[call](m);
+        }   
 };
 
 class layer{
     public:
     virtual ~layer() noexcept = default;
-    virtual vec<float> forward(const vec<float>& input) = 0;
-    virtual vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) = 0;
-    virtual vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) = 0;
+    virtual vecs<float> forward(const vecs<float>& input) = 0;
+    virtual vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) = 0;
+    virtual vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) = 0;
     virtual void update_params(float learning_rate) = 0;
-    virtual matrix<float> get_weights() const = 0;
+    virtual matricies<float> get_weights() const = 0;
     virtual int get_output_size() const = 0;
+    virtual std::string get_layer_type() const = 0;
 };
 
 void init_mat(matrix<float> &mat){
@@ -136,7 +199,7 @@ matrix<float> prep_vec(const vec<float>& image_vec, int image_width, int image_h
     // Create the result matrix directly - each submatrix becomes a column
     // Rows = filter_size * filter_size, Cols = total_submatrices
     matrix<float> result(filter_size * filter_size, total_submatrices);
-    
+    /*
     // Check if we should use GPU acceleration
     if (OpenCLAccelerator::isOpenCLAvailable() && 
         OpenCLAccelerator::shouldUseGPU(total_submatrices * filter_size * filter_size)) {
@@ -173,7 +236,7 @@ matrix<float> prep_vec(const vec<float>& image_vec, int image_width, int image_h
         
         // Fall back to CPU if GPU implementation failed
         delete[] result_data;
-    }
+    }*/
     
     // CPU implementation - directly filling the matrix
     int start_index_x = 0 - padding;
@@ -206,12 +269,12 @@ matrix<float> prep_vec(const vec<float>& image_vec, int image_width, int image_h
         }
     }
     return result;
-}
+};
 
 
 
 
-/*
+
 class conv_layer : public layer{
     private:
     int input_size_x;
@@ -219,15 +282,16 @@ class conv_layer : public layer{
     int output_size_x;
     int output_size_y;
     int filter_size;
+    int num_of_filters;
     int stride;
     int padding;
     matrix<float> weights;
     vec<float> bias;
-    vec<float> input;
-    matrix<float> input_matrix;
-    vec<float> output;
-    vec<float> preactivation;
-    vec<float> delta;
+    vecs<float> input;
+    matricies<float> input_matricies;
+    vecs<float> output;
+    vecs<float> preactivation;
+    vecs<float> delta;
     int call;
     act_func_vec act_func;
 
@@ -258,39 +322,39 @@ class conv_layer : public layer{
         int num_submatrices_x = (input_size_x + 2 * padding - filter_size) / stride + 1;
         int num_submatrices_y = (input_size_y + 2 * padding - filter_size) / stride + 1;
         int total_submatrices = num_submatrices_x * num_submatrices_y;
-        input_matrix = matrix<float>(filter_size*filter_size, total_submatrices);
+        input_matricies = matricies<float>(num_of_filters,filter_size*filter_size, total_submatrices);
     }
 
-    vec<float> forward(const vec<float>& in) override {
+    vecs<float> forward(const vecs<float>& in) override {
         input = in;
-        input_matrix = prep_vec(input, input_size_x, input_size_y, filter_size, stride, padding);
-        preactivation = weights*input_matrix;
-        preactivation = per_column_add(preactivation, bias);
-        output = act_func(preactivation, call);
+        for(int i = 0; i < input.num_of_vecs();i++){    
+            input_matricies(i) = prep_vec(input(i), input_size_x, input_size_y, filter_size, stride, padding);
+            for(int j = 0; j < num_of_filters;j++){
+
+            }
+        }
         return output;
     }
 
-    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
-        delta = transpose(prev_weight)*prev_delta;
-        delta = element_mult(delta, act_func.deriv(preactivation, call));
-        return delta;
+    vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight) override {
+        
     }
     
     void update_params(float learning_rate) override {
-        matrix<float> weight_update = transpose(input_matrix*delta);
-        weights = weights - learning_rate * weight_update;
-        bias = bias - learning_rate * delta;
+        
     }
 
     int get_output_size() const override {
         return output_size_x * output_size_y;
     }
     
-    matrix<float> get_weights() const override {
-        return weights;
+    matricies<float> get_weights() const override {
+        matricies<float> result(1, weights);
+        result(0) = weights;
+        return result;
     }
 };
-*/
+
 
 class pool_layer : public layer{
     public:
@@ -300,23 +364,23 @@ class pool_layer : public layer{
     int output_size_y;
     int pool_size;
     int stride;
-    vec<float> input;
-    matrix<float> input_matrix;
-    vec<float> output;
-    vec<float> delta;
-    matrix<float> max_pool_weights;
+    vecs<float> input;
+    matricies<float> input_matrix;
+    vecs<float> output;
+    vecs<float> delta;
+    matricies<float> max_pool_weights;
 
-    vec<float> max_pool(matrix<float> &data){
+    vec<float> max_pool(matrix<float> &data, int index){
         vec<float> result(data.col);
         // Create a weights matrix that transforms the original input vector to max pooled output
         // For a 3x3 input with 2x2 pooling and stride 1, we get 4 regions
         // The weights should be 4x9 (4 outputs x 9 input elements)
-        matrix<float> max_pool_weights(data.col, input_size_x * input_size_y);
+        
         
         // Initialize weights to zero
-        for(int i = 0; i < max_pool_weights.row; i++) {
-            for(int j = 0; j < max_pool_weights.col; j++) {
-                max_pool_weights(i, j) = 0.0f;
+        for(int i = 0; i < max_pool_weights(index).row; i++) {
+            for(int j = 0; j < max_pool_weights(index).col; j++) {
+                max_pool_weights(index)(i, j) = 0.0f;
             }
         }
         
@@ -353,7 +417,7 @@ class pool_layer : public layer{
             int orig_idx = orig_row * input_size_x + orig_col;
             
             // Place a 1 in the weight matrix where output j takes value from input orig_idx
-            max_pool_weights(j, orig_idx) = 1.0f;
+            max_pool_weights(index)(j, orig_idx) = 1.0f;
         }
         
         // Store the weights matrix for backpropagation
@@ -373,24 +437,43 @@ class pool_layer : public layer{
         int num_submatrices_x = (input_size_x - pool_size) / stride + 1;
         int num_submatrices_y = (input_size_y - pool_size) / stride + 1;
         int total_submatrices = num_submatrices_x * num_submatrices_y;
-        input_matrix = matrix<float>(pool_size*pool_size, total_submatrices);
-        output = vec<float>(total_submatrices);
+        input_matrix = matricies<float>(input.num_of_vecs(), pool_size*pool_size, total_submatrices);
+        output = vecs<float>(input.num_of_vecs(), total_submatrices);
+        max_pool_weights = matricies<float>(input.num_of_vecs(), input_size_x * input_size_y, total_submatrices);
     }
 
-    vec<float> forward(const vec<float>& in) override {
+    vecs<float> forward(const vecs<float>& in) override {
         input = in;
-        input_matrix = prep_vec(input, input_size_x, input_size_y, pool_size, stride, 0);
-        output = max_pool(input_matrix);
+        for(int i = 0; i < input.num_of_vecs(); i++){
+            input_matrix(i) = prep_vec(input(i), input_size_x, input_size_y, pool_size, stride, 0);
+            output(i) = max_pool(input_matrix(i), i);
+        }
         return output;
     }
 
-    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
-        delta = transpose(prev_weight)*prev_delta;
+    vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) override {
+        if(prev_layer_type == "dense"){
+            vec<float> temp = transpose(prev_weight(0))*(prev_delta.vectorize());
+            int num_deltas = input.num_of_vecs();
+            int subdelta_size = max_pool_weights(0).col;  // Use column count of max_pool_weights
+            delta = vecs<float>(num_deltas, subdelta_size);
+            for(int i = 0; i < num_deltas; i++){
+                for(int j = 0; j < subdelta_size; j++){
+                    delta(i)(j) = (i*subdelta_size + j < temp.size) ? temp(i*subdelta_size + j) : 0.0f;
+                }
+            }
+        }
+        else if(prev_layer_type == "conv"){
+            
+        }else{//pool
+
+        }
         return delta;
     }
 
-    vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
+    vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
         // Pooling layers don't have trainable parameters, so this is a no-op
+        return vecs<float>();
     }
     
     void update_params(float learning_rate) override {
@@ -398,13 +481,23 @@ class pool_layer : public layer{
     }
     
     matrix<float> get_weights() const override {
-        return max_pool_weights;
+        return max_pool_weights(0);
     }
     
+    matricies<float> _get_weights() const override {
+        return max_pool_weights;
+    }
+
     int get_output_size() const override {
-        return output_size_x * output_size_y;
+        return output_size_x * output_size_y * input.num_of_vecs();
+    }
+
+    std::string get_layer_type() const override {
+        return "pool";
     }
 };
+
+
 class dense_layer : public layer{
     public:
     int input_size;
@@ -451,8 +544,9 @@ class dense_layer : public layer{
         init_vec(bias);
     }
 
-    vec<float> forward(const vec<float>& in) override {
-        input = in;  // Store input for backprop
+    vecs<float> forward(const vecs<float>& in, std::string prev_layer_type) override {
+        
+        input = in.vectorize();  // Store input for backprop
         
         // Matrix-vector multiplication for forward pass
         preactivation = weights*input + bias;
@@ -460,22 +554,30 @@ class dense_layer : public layer{
         // Apply activation function
         vec<float> preact_copy = preactivation; // Copy to avoid modifying preactivation
         output = act_func(preact_copy, call);
-        
-        return output;
+        vecs<float> output_vecs(1, output.size);
+        output_vecs(0) = output;
+        return output_vecs;
     }
     
-    vec<float> calc_gradient(const vec<float>& prev_delta, const matrix<float>& prev_weight) override {
-        delta = transpose(prev_weight)*prev_delta;
+    vecs<float> calc_gradient(const vecs<float>& prev_delta, const matrix<float>& prev_weight, std::string prev_layer_type) override {
+        if(prev_layer_type == "dense"){
+            delta = prev_delta.vectorize();
+        }
+        delta = transpose(prev_weight)*delta;
         delta = element_mult(delta, act_func.deriv(preactivation, call));
-        return delta;
+        vecs<float> delta_vecs(1, delta.size);
+        delta_vecs(0) = delta;
+        return delta_vecs;
     }
     
-    vec<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
+    vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
         delta = output - actual;
         if(!(loss_func == "cross_entropy")){
             delta = element_mult(delta, act_func.deriv(preactivation, call));
         }
-        return delta;
+        vecs<float> delta_vecs(1, delta.size);
+        delta_vecs(0) = delta;
+        return delta_vecs;
     }
     
     void update_params(float learning_rate) override {
@@ -492,6 +594,14 @@ class dense_layer : public layer{
     matrix<float> get_weights() const override {
         return weights;
     }
+
+    matricies<float> _get_weights() const override {
+        return matricies<float>();
+    }
+
+    std::string get_layer_type() const override {
+        return "dense";
+    }
 };
 
 
@@ -505,6 +615,7 @@ class NeuralNetwork{
 
     NeuralNetwork(std::string loss_func, float learning_rate, int epochs): loss_func(loss_func), learning_rate(learning_rate), epochs(epochs){
     }
+
     void add_layer(std::string layer_type, std::string activation_func, int input_size_x, int output_size_x, int input_size_y = 0, int output_size_y = 0, int input_size_z = 0, int output_size_z = 0){
         if(layer_type == "dense"){
             layers.push_back(std::make_unique<dense_layer>(input_size_x, output_size_x, activation_func));
@@ -512,11 +623,14 @@ class NeuralNetwork{
     }
     
     vec<float> forward(const vec<float>& input){
-        vec<float> current_input = input;
+        vecs<float> current_input(1, input.size);
+        current_input(0) = input;
+        std::string prev_layer_type = "";
         for(auto& layer : layers){
-            current_input = layer->forward(current_input);
+            current_input = layer->forward(current_input, prev_layer_type);
+            prev_layer_type = layer->get_layer_type();
         }
-        return current_input;
+        return current_input.vectorize();
     }
     
     void backpropagation(const vec<float>& input, const vec<float>& actual, std::string loss_func, float learning_rate){
@@ -527,15 +641,25 @@ class NeuralNetwork{
         if (layers.empty()) return;
         
         // Calculate gradient for the last layer
-        vec<float> delta = layers.back()->calc_gradient_last(actual, loss_func);
-        
+        vecs<float> delta = layers.back()->calc_gradient_last(actual, loss_func);
+        std::string prev_layer_type = layers.back()->get_layer_type();
         // Backpropagate through the remaining layers
-        for (int i = layers.size() - 2; i >= 0; i--) {
+        int i = layers.size() - 2;
+        for (i; i >= 0; i--) {
             // Get weights from the next layer using the new get_weights method
-            matrix<float> next_layer_weights = layers[i + 1]->get_weights();
+            matricies<float> next_layer_weights = layers[i + 1]->get_weights();
             
             // Backpropagate delta through previous layers
-            delta = layers[i]->calc_gradient(delta, next_layer_weights);
+            delta = layers[i]->calc_gradient(delta, next_layer_weights, prev_layer_type);
+            prev_layer_type = layers[i]->get_layer_type();
+            if(prev_layer_type == "pool"){
+                break;
+            }
+        }
+        for(i; i >= 0; i--){
+            matricies<float> next_layer_weights = layers[i + 1]->_get_weights();
+            delta = layers[i]->calc_gradient(delta, next_layer_weights, prev_layer_type);
+            prev_layer_type = layers[i]->get_layer_type();
         }
         
         // Update parameters for all layers
@@ -719,7 +843,7 @@ class NeuralNetwork{
         // Region 3: [5,6,8,9] -> max is 9
         
         // Perform max pooling
-        vec<float> output = test_layer.max_pool(input_matrix);
+        vec<float> output = test_layer.max_pool(input_matrix,0);
         
         // Expected output: [5,6,8,9]
         std::cout << "Max pooling output: ";
