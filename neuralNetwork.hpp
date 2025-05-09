@@ -255,7 +255,7 @@ class conv_layer : public layer{
     vecs<float> delta;
     int call;
     act_func_vec act_func;
-
+    public:
     conv_layer(int input_size_x, int input_size_y, int output_size_x, int output_size_y, int num_of_inputs, int num_of_filters, int filter_size, int stride, int padding, std::string activation_func){
         this->input_size_x = input_size_x;
         this->input_size_y = input_size_y;
@@ -279,20 +279,32 @@ class conv_layer : public layer{
         // f23 f24
 
         weights = matrix<float>(num_of_filters, filter_size*filter_size);
+        init_mat(weights);
+
         bias = vec<float>(num_of_filters);
+        init_vec(bias);
 
         int num_submatrices_x = (input_size_x + 2 * padding - filter_size) / stride + 1;
         int num_submatrices_y = (input_size_y + 2 * padding - filter_size) / stride + 1;
         int total_submatrices = num_submatrices_x * num_submatrices_y;
         input_matricies = matricies<float>(num_of_filters,filter_size*filter_size, total_submatrices);
         preactivation_matrix = matricies<float>(num_of_filters*num_of_inputs, num_of_filters ,weights.col);
-        preactivation = vecs<float>(num_of_filters*num_of_inputs, weights.col);
+        preactivation = vecs<float>(num_of_filters*num_of_inputs, total_submatrices);
+        output = vecs<float>(num_of_inputs*num_of_filters, total_submatrices);
+        delta = vecs<float>(num_of_filters*num_of_inputs, total_submatrices);
+
+        if(activation_func == "relu"){
+            call = 0;
+        }else if(activation_func == "leaky_relu"){
+            call = 1;
+        }else{
+            std::cout << "activation function not supported: " << activation_func << std::endl;
+        }
+
     }
 
     vecs<float> forward(const vecs<float>& in) override {
         input = in;
-        int total_outputs = input.num_of_vecs() * num_of_filters;
-        output = vecs<float>(total_outputs, weights.col);
         for(int i = 0; i < input.num_of_vecs(); i++) {    
             input_matricies(i) = prep_vec(input(i), input_size_x, input_size_y, filter_size, stride, padding);
             // Apply all filters to the current input
@@ -315,31 +327,66 @@ class conv_layer : public layer{
             
             // Apply all filters to the current input
             preactivation_matrix(i) = weights * input_matricies(i);
+
             preactivation_matrix(i).add_per_col(bias);
             // Store results in the right order:
             // For input i, store filter j result at position (i*num_of_filters + j)
             for(int j = 0; j < num_of_filters; j++) {
-                output(i*num_of_filters + j) = preactivation_matrix(i).get_row(j);
+                preactivation(i*num_of_filters + j) = preactivation_matrix(i).get_row(j);
             }
+            //this should return vecs, such that output(0) = image(0) with filter(0) applied to it
+            // output(1) = image(0) with filter(1) applied to it
+            // output(2) = image(1) with filter(0) applied to it
+            // output(3) = image(1) with filter(1) applied to it
         }
-        output = act_func(output, call);
+        output = act_func(preactivation, call);
         return output;
     }
 
     vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) override {
-        // delta is a vecs of size num_of_filters * num_of_inputs
-        // I just need to multiply delta by the correct input matricies index
-
-        for(int i = 0; i < input.num_of_vecs(); i++){
-        // if there are 2(a and b ) input vecs and 2 filters (f and e ) then there are 4 (j k, l m) deltas passed back to the conv layer
-        // From there I will need to multiply each delta(i) by weights(i) 
-        // then I multiply the result by fn.deriv(preactivation(i))
+        
+        if(prev_layer_type == "pool"){
+            //delta is a vecs of size num_of_filters * num_of_inputs
+            for(int i = 0; i < prev_delta.num_of_vecs(); i++){
+                delta(i) = prev_weight(i) * prev_delta(i);
+                delta(i) = element_mult(delta(i), act_func.deriv(preactivation(i), call));
+            }
         }
-        return vecs<float>();
+        else if(prev_layer_type == "conv"){
+            std::cout << "started conv grad: \n";
+            int prev_num_of_filters = prev_weight.size();
+            int num_of_outputs = prev_delta.num_of_vecs();
+            
+            // Apply each weight matrix to all deltas
+            for(int i = 0; i < prev_num_of_filters; i++) {
+                for(int j = 0; j < num_of_outputs; j++) {
+                    delta(j) = transpose(prev_weight(i)) * prev_delta(j);
+                }
+            }
+
+            // Apply activation derivative to all deltas
+            for(int j = 0; j < num_of_outputs; j++) {
+                delta(j) = element_mult(delta(j), act_func.deriv(preactivation(j), call));
+            }
+        }else{
+            std::cout << "prev layer type not supported: " << prev_layer_type << std::endl;
+        }        
+        // Create return delta by combining results
+        vecs<float> return_delta((delta.num_of_vecs()/num_of_filters), delta.size());
+        for(int i = 0; i < return_delta.num_of_vecs(); i++) {
+            for(int j = 0; j < num_of_filters; j++) {
+                return_delta(i) = return_delta(i) + delta(i*num_of_filters + j);
+            }
+        }
+        return return_delta;
     }
     
     void update_params(float learning_rate) override {
         
+    };
+
+    vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
+        return vecs<float>();
     }
 
     int get_output_size() const override {
@@ -347,9 +394,31 @@ class conv_layer : public layer{
     }
     
     matricies<float> get_weights() const override {
-        matricies<float> result(1, weights.row, weights.col);
-        result(0) = weights;
-        return result;
+        //need to generate a different weight matrix to pass back
+        //need to go from:
+        // w11 w12 w13 w14
+        // w21 w22 w23 w24
+        //with an input of x1 x2 x3 x4 x5 x6 x7 x8 x9
+        //with the corresponding combo matrix
+        // x1 x2 x4 x5
+        // x2 x3 x5 x6
+        // x4 x5 x7 x8
+        // x5 x6 x8 x9
+        // to w new 4x9 weight matrix
+        // w11 w12 0   w13 w14 0   0   0   0
+        // 0   w11 w12 0   w13 w14 0   0   0
+        // 0   0   0   w11 w12 0   w13 w14 0
+        // 0   0   0   0   w11 w12 0   w13 w14
+        // and 
+        // w21 w22 0   w23 w24 0   0   0   0
+        // 0   w21 w22 0   w23 w24 0   0   0
+        // 0   0   0   w21 w22 0   w23 w24 0
+        // 0   0   0   0   w21 w22 0   w23 w24
+        return matricies<float>();
+    }
+
+    std::string get_layer_type() const override {
+        return "conv";
     }
 };
 
@@ -368,7 +437,7 @@ class pool_layer : public layer{
     vecs<float> delta;
     matricies<float> max_pool_weights;
 
-    vec<float> max_pool(matrix<float> &data, int index){
+    inline vec<float> max_pool(matrix<float> &data, int index){
         vec<float> result(data.col);
         // Create a weights matrix that transforms the original input vector to max pooled output
         // For a 3x3 input with 2x2 pooling and stride 1, we get 4 regions
@@ -458,11 +527,12 @@ class pool_layer : public layer{
                 }
             }
         }
+        /*
         else if(prev_layer_type == "conv"){
             
         }else{//pool
 
-        }
+        }*/ //only going to support  dense layers for now
         return delta;
     }
 

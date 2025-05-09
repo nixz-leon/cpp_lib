@@ -24,6 +24,9 @@ public:
     int size(){return num_matricies;};
     int size_col(){return size_m;};
     int size_row(){return size_n;};
+    int size() const {return num_matricies;};
+    int size_col() const {return size_m;};
+    int size_row() const {return size_n;};
 
     inline matrix<T> back(){return mats[num_matricies-1];};
     void printout();

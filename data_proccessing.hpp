@@ -113,12 +113,25 @@ template <typename T>
 void get_data(std::string filename, vecs<T> &data, vecs<T> &labels, bool header = false, char delimiter = ','){
     read_csv(filename, data, header, delimiter);
     vec<T> temp = data.back();
-    std::cout << temp.min() << std::endl;
-    std::cout << temp.max() << std::endl;
     labels = data_classification(temp);
     
     data = data.subset(0, data.num_of_vecs() - 2);
     std::cout << data.num_of_vecs() << std::endl;
+    for(int i = 0; i < data.num_of_vecs(); i++){
+        data(i) = normalize_data(data(i));
+    }
+    data = switch_major_minor(data);
+}
+
+template <typename T>
+void get_data_single(std::string filename, vecs<T> &data, vecs<T> &labels, bool header = false, char delimiter = ','){
+    read_csv(filename, data, header, delimiter);
+    vecs<T> temp(data.num_of_vecs(), 1);
+    for(int i = 0; i < data.num_of_vecs(); i++){
+        temp(i)(0) = data(i)(data.size() - 1);
+    }
+    labels = temp;
+    data = data.subset(0, data.num_of_vecs() - 1);
     for(int i = 0; i < data.num_of_vecs(); i++){
         data(i) = normalize_data(data(i));
     }

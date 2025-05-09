@@ -225,6 +225,11 @@ class vec {
             return addSequential(a, b);
         }
 
+        inline vec<T> operator+=(const vec<T>& other){
+            *this = *this + other;
+            return *this;
+        }
+        
         inline friend vec<T> operator-(const vec<T>& a, const vec<T>& b) {
             if (a.data == nullptr || b.data == nullptr) {
                 std::cout << "Error: vector is empty\n";

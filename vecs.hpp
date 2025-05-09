@@ -29,6 +29,7 @@ public:
     inline const vec<T>& back() const { return vectors[num_vecs-1]; };
     void printout();
     vecs<T> subset(int start_col, int end_col); // Subset function
+    vecs<T> subset(int start_col, int end_col) const;
     vec<T> vectorize();
     vec<T> vectorize() const;
 };
@@ -143,6 +144,15 @@ void vecs<T>::printout() {
 
 template <class T>
 vecs<T> vecs<T>::subset(int start_index, int end_index) {
+    int new_num = end_index - start_index + 1;
+    vecs<T> result(new_num, size_of_vecs);
+    for (int i = start_index; i <= end_index; i++) {
+        result(i - start_index) = vectors[i];
+    }
+    return result;
+}
+template <class T>
+vecs<T> vecs<T>::subset(int start_index, int end_index) const{
     int new_num = end_index - start_index + 1;
     vecs<T> result(new_num, size_of_vecs);
     for (int i = start_index; i <= end_index; i++) {

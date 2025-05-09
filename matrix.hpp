@@ -148,6 +148,7 @@ class matrix {
         inline matrix<T> operator/=(T c);
         inline matrix<T> operator *=(T c);
         inline vec<T> operator*(vec<T> b);
+        inline vec<T> operator*(vec<T> b) const;
         inline friend vec<T> vectorize(matrix<T> a){
             vec<T> temp(a.col * a.row);
             for(int i = 0; i < a.col; i++){
@@ -523,6 +524,54 @@ inline vec<T> matrix<T>::operator*(vec<T> b)
     return temp;
 }
 
+template <typename T>
+inline vec<T> matrix<T>::operator*(vec<T> b) const
+{
+    if (this->data == nullptr) {
+        std::cout << "Error: matrix is empty\n";
+        exit(0);
+    }
+    if (b.size != this->col) {
+        std::cout << "Error: Tried to multiply a matrix of size " << this->row << "x" << this->col
+                  << " with a vector of size " << b.size << "\n";
+        exit(0);
+    }
+
+    // Use hardware acceleration if available
+    try {
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+            if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(this->row * this->col)) {
+                vec<T> result(this->row);
+                bool success = OpenCLAccelerator::multiplyMatrixVector(
+                    this->data, this->row, this->col,
+                    b.data, result.data
+                );
+                
+                if (success) {
+                    return result;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        // Fall back to CPU if hardware acceleration fails
+        std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
+    }
+
+    // CPU implementation as fallback
+    vec<T> temp(this->row);
+    T sum = 0;
+
+    // Use cache-friendly loop ordering and vectorization hints
+    #pragma omp parallel for simd
+    for (int i = 0; i < this->row; i++) {
+        sum = 0;
+        for (int j = 0; j < this->col; j++) {
+            sum += this->data[(i * this->col) + j] * b.data[j];
+        }
+        temp.data[i] = sum;
+    }
+    return temp;
+}
 
 template <typename T>
 inline matrix<T> outer_product(vec<T> a, vec<T> b){
