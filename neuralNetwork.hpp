@@ -284,14 +284,16 @@ class conv_layer : public layer{
         bias = vec<float>(num_of_filters);
         init_vec(bias);
 
+        int num_outputs = num_of_filters * num_of_inputs;
+
         int num_submatrices_x = (input_size_x + 2 * padding - filter_size) / stride + 1;
         int num_submatrices_y = (input_size_y + 2 * padding - filter_size) / stride + 1;
         int total_submatrices = num_submatrices_x * num_submatrices_y;
         input_matricies = matricies<float>(num_of_filters,filter_size*filter_size, total_submatrices);
         preactivation_matrix = matricies<float>(num_of_filters*num_of_inputs, num_of_filters ,weights.col);
-        preactivation = vecs<float>(num_of_filters*num_of_inputs, total_submatrices);
-        output = vecs<float>(num_of_inputs*num_of_filters, total_submatrices);
-        delta = vecs<float>(num_of_filters*num_of_inputs, total_submatrices);
+        preactivation = vecs<float>(num_outputs, total_submatrices);
+        output = vecs<float>(num_outputs, total_submatrices);
+        delta = vecs<float>(num_of_inputs, total_submatrices);
 
         if(activation_func == "relu"){
             call = 0;
@@ -344,45 +346,47 @@ class conv_layer : public layer{
     }
 
     vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) override {
-        
+        vecs<float> temp_delta(prev_delta.num_of_vecs(), delta.size());
         if(prev_layer_type == "pool"){
             //delta is a vecs of size num_of_filters * num_of_inputs
             for(int i = 0; i < prev_delta.num_of_vecs(); i++){
-                delta(i) = prev_weight(i) * prev_delta(i);
-                delta(i) = element_mult(delta(i), act_func.deriv(preactivation(i), call));
+                temp_delta(i) = prev_weight(i) * prev_delta(i);
+                temp_delta(i) = element_mult(temp_delta(i), act_func.deriv(preactivation(i), call));
             }
         }
         else if(prev_layer_type == "conv"){
-            std::cout << "started conv grad: \n";
             int prev_num_of_filters = prev_weight.size();
             int num_of_outputs = prev_delta.num_of_vecs();
-            
             // Apply each weight matrix to all deltas
             for(int i = 0; i < prev_num_of_filters; i++) {
                 for(int j = 0; j < num_of_outputs; j++) {
-                    delta(j) = transpose(prev_weight(i)) * prev_delta(j);
+                    temp_delta(j) = transpose(prev_weight(i)) * prev_delta(j);
                 }
             }
-
             // Apply activation derivative to all deltas
             for(int j = 0; j < num_of_outputs; j++) {
-                delta(j) = element_mult(delta(j), act_func.deriv(preactivation(j), call));
+                temp_delta(j) = element_mult(temp_delta(j), act_func.deriv(preactivation(j), call));
             }
         }else{
             std::cout << "prev layer type not supported: " << prev_layer_type << std::endl;
         }        
         // Create return delta by combining results
-        vecs<float> return_delta((delta.num_of_vecs()/num_of_filters), delta.size());
-        for(int i = 0; i < return_delta.num_of_vecs(); i++) {
+        for(int i = 0; i < delta.num_of_vecs(); i++) {
             for(int j = 0; j < num_of_filters; j++) {
-                return_delta(i) = return_delta(i) + delta(i*num_of_filters + j);
+                delta(i) = delta(i) + temp_delta(i*num_of_filters + j);
             }
         }
-        return return_delta;
+        return delta;
     }
     
     void update_params(float learning_rate) override {
-        
+        vecs<float> grad(delta.num_of_vecs()    , weights.col);
+        for(int i = 0; i< num_of_inputs; i++){
+            for(int j = 0; j < num_of_filters; j++){
+                grad(i+j)= input_matricies(i) * delta(i+j); 
+            }
+            //need to think how to do the combiniation of the deltas
+        }
     };
 
     vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
