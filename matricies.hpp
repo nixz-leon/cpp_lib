@@ -40,10 +40,10 @@ matricies<T>::matricies() : num_matricies(0), size_n(0), size_m(0), mats(nullptr
 //normal constructor
 template <class T>
 matricies<T>::matricies(int num_mats, int n, int m) : num_matricies(num_mats), size_n(n), size_m(m) {
-    matrix<T> temp(n,m);
-    mats = new matrix<T>[num_mats];  // Use new instead of calloc
+    mats = new matrix<T>[num_mats];  // Use new instead of calloc, default constructs matrix<T> objects
     for(int i = 0; i < num_mats; ++i){
-        mats[i] = temp;
+        mats[i] = matrix<T>(n,m); // Create a temporary matrix(n,m) and move-assign to mats[i]
+                                  // This relies on matrix<T>'s move assignment operator.
     }
 }
 //copy constructor

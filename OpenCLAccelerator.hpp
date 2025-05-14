@@ -42,20 +42,19 @@ private:
     
     // Kernels
     static cl_kernel vec_add_float_kernel;
-    static cl_kernel vec_add_double_kernel;
+    static cl_kernel vec_sub_float_kernel;
     static cl_kernel vec_mult_float_kernel;
-    static cl_kernel vec_mult_double_kernel;
     static cl_kernel vec_dot_float_kernel;
-    static cl_kernel vec_dot_double_kernel;
     static cl_kernel matmul_float_kernel;
-    static cl_kernel matmul_double_kernel;
+    static cl_kernel outer_prod_float_kernel;
+    static cl_kernel prep_vec_float_kernel;
+    static cl_kernel vec_scale_float_kernel;
     
     static std::mutex cl_mutex;
     static std::atomic<bool> initialized;
     static size_t max_work_group_size;
     static size_t max_compute_units;
     static size_t max_mem_alloc_size;
-    static bool has_double_support;
     static int gpu_threshold;
 
     // Detect CPU capabilities
@@ -188,16 +187,6 @@ private:
             clGetDeviceInfo(device, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(size_t), &max_compute_units, nullptr);
             clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &max_mem_alloc_size, nullptr);
             
-            // Check for double precision support
-            size_t ext_size;
-            clGetDeviceInfo(device, CL_DEVICE_EXTENSIONS, 0, nullptr, &ext_size);
-            if (ext_size > 0) {
-                std::vector<char> extensions(ext_size);
-                clGetDeviceInfo(device, CL_DEVICE_EXTENSIONS, ext_size, extensions.data(), nullptr);
-                std::string ext_str(extensions.begin(), extensions.end());
-                has_double_support = (ext_str.find("cl_khr_fp64") != std::string::npos);
-            }
-            
             // Set GPU threshold based on capabilities
             gpu_threshold = std::max(256, static_cast<int>(std::sqrt(max_mem_alloc_size / sizeof(float))));
             
@@ -253,63 +242,87 @@ private:
             // Create kernels
             vec_add_float_kernel = clCreateKernel(program, "vec_add_float", &error);
             if (error != CL_SUCCESS) {
-                std::cerr << "Failed to create vec_add_float kernel" << std::endl;
+                std::cerr << "Failed to create vec_add_float kernel: " << error << std::endl;
+                clReleaseProgram(program);
+                return false;
+            }
+            
+            vec_sub_float_kernel = clCreateKernel(program, "vec_sub_float", &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Failed to create vec_sub_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
                 clReleaseProgram(program);
                 return false;
             }
             
             vec_mult_float_kernel = clCreateKernel(program, "vec_mult_float", &error);
             if (error != CL_SUCCESS) {
-                std::cerr << "Failed to create vec_mult_float kernel" << std::endl;
-                clReleaseKernel(vec_add_float_kernel);
+                std::cerr << "Failed to create vec_mult_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                clReleaseProgram(program);
+                return false;
+            }
+            
+            vec_scale_float_kernel = clCreateKernel(program, "vec_scale_float", &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Failed to create vec_scale_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                if (vec_mult_float_kernel) clReleaseKernel(vec_mult_float_kernel);
                 clReleaseProgram(program);
                 return false;
             }
             
             vec_dot_float_kernel = clCreateKernel(program, "vec_dot_float", &error);
             if (error != CL_SUCCESS) {
-                std::cerr << "Failed to create vec_dot_float kernel" << std::endl;
-                clReleaseKernel(vec_add_float_kernel);
-                clReleaseKernel(vec_mult_float_kernel);
+                std::cerr << "Failed to create vec_dot_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                if (vec_mult_float_kernel) clReleaseKernel(vec_mult_float_kernel);
+                if (vec_scale_float_kernel) clReleaseKernel(vec_scale_float_kernel);
                 clReleaseProgram(program);
                 return false;
             }
             
             matmul_float_kernel = clCreateKernel(program, "matmul_float", &error);
             if (error != CL_SUCCESS) {
-                std::cerr << "Failed to create matmul_float kernel" << std::endl;
-                clReleaseKernel(vec_add_float_kernel);
-                clReleaseKernel(vec_mult_float_kernel);
-                clReleaseKernel(vec_dot_float_kernel);
+                std::cerr << "Failed to create matmul_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                if (vec_mult_float_kernel) clReleaseKernel(vec_mult_float_kernel);
+                if (vec_scale_float_kernel) clReleaseKernel(vec_scale_float_kernel);
+                if (vec_dot_float_kernel) clReleaseKernel(vec_dot_float_kernel);
                 clReleaseProgram(program);
                 return false;
             }
             
-            // Create double precision kernels if supported
-            if (has_double_support) {
-                vec_add_double_kernel = clCreateKernel(program, "vec_add_double", &error);
-                if (error != CL_SUCCESS) {
-                    std::cerr << "Failed to create vec_add_double kernel" << std::endl;
-                    has_double_support = false;
-                }
-                
-                vec_mult_double_kernel = clCreateKernel(program, "vec_mult_double", &error);
-                if (error != CL_SUCCESS) {
-                    std::cerr << "Failed to create vec_mult_double kernel" << std::endl;
-                    has_double_support = false;
-                }
-                
-                vec_dot_double_kernel = clCreateKernel(program, "vec_dot_double", &error);
-                if (error != CL_SUCCESS) {
-                    std::cerr << "Failed to create vec_dot_double kernel" << std::endl;
-                    has_double_support = false;
-                }
-                
-                matmul_double_kernel = clCreateKernel(program, "matmul_double", &error);
-                if (error != CL_SUCCESS) {
-                    std::cerr << "Failed to create matmul_double kernel" << std::endl;
-                    has_double_support = false;
-                }
+            outer_prod_float_kernel = clCreateKernel(program, "outer_prod_float", &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Failed to create outer_prod_float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                if (vec_mult_float_kernel) clReleaseKernel(vec_mult_float_kernel);
+                if (vec_scale_float_kernel) clReleaseKernel(vec_scale_float_kernel);
+                if (vec_dot_float_kernel) clReleaseKernel(vec_dot_float_kernel);
+                if (matmul_float_kernel) clReleaseKernel(matmul_float_kernel);
+                clReleaseProgram(program);
+                return false;
+            }
+            
+            // Create prep_vec kernels
+            prep_vec_float_kernel = clCreateKernel(program, "prep_vec_kernel_float", &error);
+            if (error != CL_SUCCESS) {
+                std::cerr << "Failed to create prep_vec float kernel: " << error << std::endl;
+                if (vec_add_float_kernel) clReleaseKernel(vec_add_float_kernel);
+                if (vec_sub_float_kernel) clReleaseKernel(vec_sub_float_kernel);
+                if (vec_mult_float_kernel) clReleaseKernel(vec_mult_float_kernel);
+                if (vec_scale_float_kernel) clReleaseKernel(vec_scale_float_kernel);
+                if (vec_dot_float_kernel) clReleaseKernel(vec_dot_float_kernel);
+                if (matmul_float_kernel) clReleaseKernel(matmul_float_kernel);
+                if (outer_prod_float_kernel) clReleaseKernel(outer_prod_float_kernel);
+                clReleaseProgram(program);
+                return false;
             }
             
             return true;
@@ -465,627 +478,637 @@ public:
         }
     }
     
-    // Vector addition - double version
-    static bool addVectors(const double* a, const double* b, double* result, int length) {
-        if (!cl_available || !has_double_support) return false;
-        
+    // Vector subtraction - float version
+    static bool subtractVectors(const float* a, const float* b, float* result, int length) {
         std::lock_guard<std::mutex> lock(cl_mutex);
+        if (!cl_available || !shouldUseGPU(length)) return false;
+
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
+        try {
+            // Create buffers
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)b, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to create b_buffer: " << error << std::endl; throw; }
+
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to create result_buffer: " << error << std::endl; throw; }
+
+            // Set kernel arguments
+            error = clSetKernelArg(vec_sub_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 1, sizeof(cl_mem), &b_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 3, sizeof(int), &length);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to set kernel args: " << error << std::endl; throw; }
+
+            // Determine global and local work sizes
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+
+            // Execute kernel
+            error = clEnqueueNDRangeKernel(queue, vec_sub_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to enqueue kernel: " << error << std::endl; throw; }
+
+            // Read result
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "subtractVectors: Failed to read buffer: " << error << std::endl; throw; }
+
+            // Cleanup
+            clReleaseMemObject(a_buffer);
+            clReleaseMemObject(b_buffer);
+            clReleaseMemObject(result_buffer);
+
+            return true;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
+            return false;
+        }
+    }
+
+    static bool scaleVector(const float* a, float scalar, float* result, int length) {
+        std::lock_guard<std::mutex> lock(cl_mutex);
+        if (!cl_available || !shouldUseGPU(length)) return false;
+
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
+        try {
+            // Create buffers
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "scaleVector: Failed to create a_buffer: " << error << std::endl; throw; }
+            
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "scaleVector: Failed to create result_buffer: " << error << std::endl; throw; }
+
+            // Set kernel arguments
+            error = clSetKernelArg(vec_scale_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_scale_float_kernel, 1, sizeof(float), &scalar);
+            error |= clSetKernelArg(vec_scale_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_scale_float_kernel, 3, sizeof(int), &length);
+            if (error != CL_SUCCESS) { std::cerr << "scaleVector: Failed to set kernel args: " << error << std::endl; throw; }
+
+            // Determine global and local work sizes
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+
+            // Execute kernel
+            error = clEnqueueNDRangeKernel(queue, vec_scale_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "scaleVector: Failed to enqueue kernel: " << error << std::endl; throw; }
+
+            // Read result
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "scaleVector: Failed to read buffer: " << error << std::endl; throw; }
+
+            // Cleanup
+            clReleaseMemObject(a_buffer);
+            clReleaseMemObject(result_buffer);
+
+            return true;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
+            return false;
+        }
+    }
+
+    static bool elementMultiply(const float* a, const float* b, float* result, int length) {
+        std::lock_guard<std::mutex> lock(cl_mutex);
+        if (!cl_available || !shouldUseGPU(length)) return false;
+
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
         
         try {
-            cl_int error;
-            
             // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)b, &error);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to create b_buffer: " << error << std::endl; throw; }
             
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
-            
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-                                                sizeof(double) * length, nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
-            
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to create result_buffer: " << error << std::endl; throw; }
+
             // Set kernel arguments
-            error = clSetKernelArg(vec_add_double_kernel, 0, sizeof(cl_mem), &a_buffer);
-            error |= clSetKernelArg(vec_add_double_kernel, 1, sizeof(cl_mem), &b_buffer);
-            error |= clSetKernelArg(vec_add_double_kernel, 2, sizeof(cl_mem), &result_buffer);
-            error |= clSetKernelArg(vec_add_double_kernel, 3, sizeof(int), &length);
-            
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
+            error = clSetKernelArg(vec_mult_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_mult_float_kernel, 1, sizeof(cl_mem), &b_buffer);
+            error |= clSetKernelArg(vec_mult_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_mult_float_kernel, 3, sizeof(int), &length);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to set kernel args: " << error << std::endl; throw; }
             
             // Determine global and local work sizes
             size_t local_size = std::min(max_work_group_size, (size_t)256);
             size_t global_size = ((length + local_size - 1) / local_size) * local_size;
-            
+
             // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, vec_add_double_kernel, 1, nullptr,
-                                          &global_size, &local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
+            error = clEnqueueNDRangeKernel(queue, vec_mult_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to enqueue kernel: " << error << std::endl; throw; }
+
             // Read result
             error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(double) * length, result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Clean up
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "elementMultiply: Failed to read buffer: " << error << std::endl; throw; }
+
+            // Cleanup
             clReleaseMemObject(a_buffer);
             clReleaseMemObject(b_buffer);
             clReleaseMemObject(result_buffer);
             
             return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL vector addition failed: " << e.what() << std::endl;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
             return false;
         }
     }
-    
-    // Vector multiplication - float version
-    static bool multiplyVectors(const float* a, const float* b, float* result, int length) {
-        if (!cl_available) return false;
-        
+
+    // Add new functions for matrix operations
+    static bool addMatrices(const float* a, const float* b, float* result, int rows, int cols) {
         std::lock_guard<std::mutex> lock(cl_mutex);
+        const int length = rows * cols;
+        if (!cl_available || !shouldUseGPU(length)) return false;
         
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
         try {
-            cl_int error;
-            
             // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
                                            sizeof(float) * length, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
                                            sizeof(float) * length, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to create b_buffer: " << error << std::endl; throw; }
             
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
                                                 sizeof(float) * length, nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to create result_buffer: " << error << std::endl; throw; }
+            
+            // Set kernel arguments
+            error = clSetKernelArg(vec_add_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_add_float_kernel, 1, sizeof(cl_mem), &b_buffer);
+            error |= clSetKernelArg(vec_add_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_add_float_kernel, 3, sizeof(int), &length);
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to set kernel args: " << error << std::endl; throw; }
+            
+            // Execute kernel
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+            error = clEnqueueNDRangeKernel(queue, vec_add_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to enqueue kernel: " << error << std::endl; throw; }
+            
+            // Read result
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "addMatrices: Failed to read buffer: " << error << std::endl; throw; }
+            
+            // Cleanup
+            clReleaseMemObject(a_buffer);
+            clReleaseMemObject(b_buffer);
+            clReleaseMemObject(result_buffer);
+            
+            return true;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
+            return false;
+        }
+    }
+
+    static bool subtractMatrices(const float* a, const float* b, float* result, int rows, int cols) {
+        std::lock_guard<std::mutex> lock(cl_mutex);
+        const int length = rows * cols;
+        if (!cl_available || !shouldUseGPU(length)) return false;
+        
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
+        try {
+            // Create buffers
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)b, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to create b_buffer: " << error << std::endl; throw; }
+            
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to create result_buffer: " << error << std::endl; throw; }
+            
+            // Set kernel arguments
+            error = clSetKernelArg(vec_sub_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 1, sizeof(cl_mem), &b_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_sub_float_kernel, 3, sizeof(int), &length);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to set kernel args: " << error << std::endl; throw; }
+            
+            // Execute kernel
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+            error = clEnqueueNDRangeKernel(queue, vec_sub_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to enqueue kernel: " << error << std::endl; throw; }
+            
+            // Read result
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "subtractMatrices: Failed to read buffer: " << error << std::endl; throw; }
+            
+            // Cleanup
+            clReleaseMemObject(a_buffer);
+            clReleaseMemObject(b_buffer);
+            clReleaseMemObject(result_buffer);
+            
+            return true;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
+            return false;
+        }
+    }
+
+    static bool scaleMatrix(const float* a, float scalar, float* result, int rows, int cols) {
+        std::lock_guard<std::mutex> lock(cl_mutex);
+        const int length = rows * cols;
+        if (!cl_available || !shouldUseGPU(length)) return false;
+        
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
+        try {
+            // Create buffers
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "scaleMatrix: Failed to create a_buffer: " << error << std::endl; throw; }
+            
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "scaleMatrix: Failed to create result_buffer: " << error << std::endl; throw; }
+            
+            // Set kernel arguments
+            error = clSetKernelArg(vec_scale_float_kernel, 0, sizeof(cl_mem), &a_buffer);
+            error |= clSetKernelArg(vec_scale_float_kernel, 1, sizeof(float), &scalar);
+            error |= clSetKernelArg(vec_scale_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_scale_float_kernel, 3, sizeof(int), &length);
+             if (error != CL_SUCCESS) { std::cerr << "scaleMatrix: Failed to set kernel args: " << error << std::endl; throw; }
+            
+            // Execute kernel
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+            error = clEnqueueNDRangeKernel(queue, vec_scale_float_kernel, 1, nullptr,
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "scaleMatrix: Failed to enqueue kernel: " << error << std::endl; throw; }
+            
+            // Read result
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "scaleMatrix: Failed to read buffer: " << error << std::endl; throw; }
+            
+            // Cleanup
+            clReleaseMemObject(a_buffer);
+            clReleaseMemObject(result_buffer);
+            
+            return true;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
+            return false;
+        }
+    }
+
+    static bool hadamardProduct(const float* a, const float* b, float* result, int rows, int cols) {
+        std::lock_guard<std::mutex> lock(cl_mutex);
+        const int length = rows * cols;
+        if (!cl_available || !shouldUseGPU(length)) return false;
+        
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
+        try {
+            // Create buffers
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                           sizeof(float) * length, (void*)b, &error);
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to create b_buffer: " << error << std::endl; throw; }
+            
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                sizeof(float) * length, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to create result_buffer: " << error << std::endl; throw; }
             
             // Set kernel arguments
             error = clSetKernelArg(vec_mult_float_kernel, 0, sizeof(cl_mem), &a_buffer);
             error |= clSetKernelArg(vec_mult_float_kernel, 1, sizeof(cl_mem), &b_buffer);
             error |= clSetKernelArg(vec_mult_float_kernel, 2, sizeof(cl_mem), &result_buffer);
             error |= clSetKernelArg(vec_mult_float_kernel, 3, sizeof(int), &length);
-            
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Determine global and local work sizes
-            size_t local_size = std::min(max_work_group_size, (size_t)256);
-            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to set kernel args: " << error << std::endl; throw; }
             
             // Execute kernel
+            size_t local_size = std::min(max_work_group_size, (size_t)256);
+            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
             error = clEnqueueNDRangeKernel(queue, vec_mult_float_kernel, 1, nullptr,
-                                          &global_size, &local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
+                                 &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to enqueue kernel: " << error << std::endl; throw; }
             
             // Read result
             error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(float) * length, result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
+                              sizeof(float) * length, result, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "hadamardProduct: Failed to read buffer: " << error << std::endl; throw; }
             
-            // Clean up
+            // Cleanup
             clReleaseMemObject(a_buffer);
             clReleaseMemObject(b_buffer);
             clReleaseMemObject(result_buffer);
             
             return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL vector multiplication failed: " << e.what() << std::endl;
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
             return false;
         }
     }
-    
-    // Vector multiplication - double version
-    static bool multiplyVectors(const double* a, const double* b, double* result, int length) {
-        if (!cl_available || !has_double_support) return false;
-        
-        std::lock_guard<std::mutex> lock(cl_mutex);
-        
-        try {
-            cl_int error;
-            
-            // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
-            
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-                                                sizeof(double) * length, nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
-            
-            // Set kernel arguments
-            error = clSetKernelArg(vec_mult_double_kernel, 0, sizeof(cl_mem), &a_buffer);
-            error |= clSetKernelArg(vec_mult_double_kernel, 1, sizeof(cl_mem), &b_buffer);
-            error |= clSetKernelArg(vec_mult_double_kernel, 2, sizeof(cl_mem), &result_buffer);
-            error |= clSetKernelArg(vec_mult_double_kernel, 3, sizeof(int), &length);
-            
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Determine global and local work sizes
-            size_t local_size = std::min(max_work_group_size, (size_t)256);
-            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
-            
-            // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, vec_mult_double_kernel, 1, nullptr,
-                                          &global_size, &local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Read result
-            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(double) * length, result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Clean up
-            clReleaseMemObject(a_buffer);
-            clReleaseMemObject(b_buffer);
-            clReleaseMemObject(result_buffer);
-            
-            return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL vector multiplication failed: " << e.what() << std::endl;
-            return false;
-        }
-    }
-    
+
     // Dot product - float version
     static bool dotProduct(const float* a, const float* b, int length, float& result) {
-        if (!cl_available) return false;
-        
         std::lock_guard<std::mutex> lock(cl_mutex);
-        
+        if (!cl_available || !shouldUseGPU(length)) return false;
+
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem partial_results_buffer = nullptr;
+        float* partial_results_host = nullptr;
+
         try {
-            cl_int error;
-            
-            // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(float) * length, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(float) * length, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
-            
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                                                sizeof(float), nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
-            
-            // Initialize result to 0
-            float zero = 0.0f;
-            error = clEnqueueWriteBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(float), &zero, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Determine local size
             size_t local_size = std::min(max_work_group_size, (size_t)256);
-            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
+            // Ensure global_size is a multiple of local_size and covers at least length elements
+            // More accurately, num_groups should be (length + local_size -1) / local_size
+            // but vec_dot_float kernel is designed such that get_global_id(0) is used to check id < length.
+            // The number of groups determines the size of partial_results.
+            size_t num_groups = (length + local_size - 1) / local_size;
+            size_t global_size = num_groups * local_size;
+
+            if (num_groups == 0) { // Handle length == 0 case
+                result = 0.0f;
+                return true;
+            }
             
-            // Create local memory for reduction
-            cl_int local_mem_size = sizeof(float) * local_size;
-            
-            // Set kernel arguments
+            partial_results_host = new float[num_groups];
+
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * length, (void*)a, &error);
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * length, (void*)b, &error);
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to create b_buffer: " << error << std::endl; throw; }
+
+            partial_results_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(float) * num_groups, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to create partial_results_buffer: " << error << std::endl; throw; }
+
             error = clSetKernelArg(vec_dot_float_kernel, 0, sizeof(cl_mem), &a_buffer);
             error |= clSetKernelArg(vec_dot_float_kernel, 1, sizeof(cl_mem), &b_buffer);
-            error |= clSetKernelArg(vec_dot_float_kernel, 2, sizeof(cl_mem), &result_buffer);
+            error |= clSetKernelArg(vec_dot_float_kernel, 2, sizeof(cl_mem), &partial_results_buffer);
             error |= clSetKernelArg(vec_dot_float_kernel, 3, sizeof(int), &length);
-            error |= clSetKernelArg(vec_dot_float_kernel, 4, local_mem_size, nullptr);
-            
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
+            error |= clSetKernelArg(vec_dot_float_kernel, 4, sizeof(float) * local_size, nullptr); // Local memory
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to set kernel args: " << error << std::endl; throw; }
+
+            error = clEnqueueNDRangeKernel(queue, vec_dot_float_kernel, 1, nullptr, &global_size, &local_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to enqueue kernel: " << error << std::endl; throw; }
+
+            error = clEnqueueReadBuffer(queue, partial_results_buffer, CL_TRUE, 0, sizeof(float) * num_groups, partial_results_host, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "dotProduct: Failed to read buffer: " << error << std::endl; throw; }
+
+            result = 0.0f;
+            for (size_t i = 0; i < num_groups; ++i) {
+                result += partial_results_host[i];
             }
-            
-            // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, vec_dot_float_kernel, 1, nullptr,
-                                          &global_size, &local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Read result
-            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(float), &result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Clean up
-            clReleaseMemObject(a_buffer);
-            clReleaseMemObject(b_buffer);
-            clReleaseMemObject(result_buffer);
-            
+
+            clReleaseMemObject(a_buffer); a_buffer = nullptr;
+            clReleaseMemObject(b_buffer); b_buffer = nullptr;
+            clReleaseMemObject(partial_results_buffer); partial_results_buffer = nullptr;
+            delete[] partial_results_host; partial_results_host = nullptr;
             return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL dot product failed: " << e.what() << std::endl;
+
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (partial_results_buffer) clReleaseMemObject(partial_results_buffer);
+            delete[] partial_results_host;
             return false;
         }
     }
-    
-    // Dot product - double version
-    static bool dotProduct(const double* a, const double* b, int length, double& result) {
-        if (!cl_available || !has_double_support) return false;
-        
+
+    // Matrix multiplication: C = A * B
+    static bool multiplyMatrices(const float* a_data, int a_rows, int a_cols,
+                                 const float* b_data, int b_rows, int b_cols, 
+                                 float* result_data) {
         std::lock_guard<std::mutex> lock(cl_mutex);
-        
+        if (a_cols != b_rows) return false; // Dimension check
+        if (!cl_available || !shouldUseGPU(a_rows * a_cols + b_rows * b_cols + a_rows * b_cols)) return false;
+
+        cl_int error = CL_SUCCESS;
+        cl_mem a_buffer = nullptr;
+        cl_mem b_buffer = nullptr;
+        cl_mem result_buffer = nullptr;
+
         try {
-            cl_int error;
-            
-            // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * length, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
-            
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_READ_WRITE,
-                                                sizeof(double), nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
-            
-            // Initialize result to 0
-            double zero = 0.0;
-            error = clEnqueueWriteBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(double), &zero, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Determine local size
-            size_t local_size = std::min(max_work_group_size, (size_t)256);
-            size_t global_size = ((length + local_size - 1) / local_size) * local_size;
-            
-            // Create local memory for reduction
-            cl_int local_mem_size = sizeof(double) * local_size;
-            
-            // Set kernel arguments
-            error = clSetKernelArg(vec_dot_double_kernel, 0, sizeof(cl_mem), &a_buffer);
-            error |= clSetKernelArg(vec_dot_double_kernel, 1, sizeof(cl_mem), &b_buffer);
-            error |= clSetKernelArg(vec_dot_double_kernel, 2, sizeof(cl_mem), &result_buffer);
-            error |= clSetKernelArg(vec_dot_double_kernel, 3, sizeof(int), &length);
-            error |= clSetKernelArg(vec_dot_double_kernel, 4, local_mem_size, nullptr);
-            
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, vec_dot_double_kernel, 1, nullptr,
-                                          &global_size, &local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Read result
-            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(double), &result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Clean up
-            clReleaseMemObject(a_buffer);
-            clReleaseMemObject(b_buffer);
-            clReleaseMemObject(result_buffer);
-            
-            return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL dot product failed: " << e.what() << std::endl;
-            return false;
-        }
-    }
-    
-    // Matrix-matrix multiplication - float version
-    static bool multiplyMatrices(const float* a, int a_rows, int a_cols,
-                               const float* b, int b_rows, int b_cols,
-                               float* result) {
-        if (!cl_available) return false;
-        if (a_cols != b_rows) return false;
-        
-        std::lock_guard<std::mutex> lock(cl_mutex);
-        
-        try {
-            cl_int error;
-            
-            // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(float) * a_rows * a_cols, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(float) * b_rows * b_cols, (void*)b, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                return false;
-            }
-            
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-                                                sizeof(float) * a_rows * b_cols, nullptr, &error);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                return false;
-            }
-            
-            // Determine tile size for local memory (usually 16x16 or 32x32)
-            size_t tile_size = 16;
-            size_t local_size[2] = {tile_size, tile_size};
-            size_t global_size[2] = {
-                ((b_cols + tile_size - 1) / tile_size) * tile_size,
-                ((a_rows + tile_size - 1) / tile_size) * tile_size
-            };
-            
-            // Set kernel arguments
+            size_t size_a = sizeof(float) * a_rows * a_cols;
+            size_t size_b = sizeof(float) * b_rows * b_cols;
+            size_t size_result = sizeof(float) * a_rows * b_cols;
+
+            a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, size_a, (void*)a_data, &error);
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to create a_buffer: " << error << std::endl; throw; }
+
+            b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, size_b, (void*)b_data, &error);
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to create b_buffer: " << error << std::endl; throw; }
+
+            result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, size_result, nullptr, &error);
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to create result_buffer: " << error << std::endl; throw; }
+
             error = clSetKernelArg(matmul_float_kernel, 0, sizeof(cl_mem), &a_buffer);
             error |= clSetKernelArg(matmul_float_kernel, 1, sizeof(cl_mem), &b_buffer);
             error |= clSetKernelArg(matmul_float_kernel, 2, sizeof(cl_mem), &result_buffer);
             error |= clSetKernelArg(matmul_float_kernel, 3, sizeof(int), &a_rows);
-            error |= clSetKernelArg(matmul_float_kernel, 4, sizeof(int), &a_cols);
+            error |= clSetKernelArg(matmul_float_kernel, 4, sizeof(int), &a_cols); // a_cols is also b_rows
             error |= clSetKernelArg(matmul_float_kernel, 5, sizeof(int), &b_cols);
-            error |= clSetKernelArg(matmul_float_kernel, 6, sizeof(float) * tile_size * tile_size, nullptr);
-            error |= clSetKernelArg(matmul_float_kernel, 7, sizeof(float) * tile_size * tile_size, nullptr);
             
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
+            // Determine local work size for matmul_float_kernel (e.g., 16x16 tile)
+            // The kernel uses get_local_size(0) as TILE_SIZE. This should be a power of 2.
+            // Max work group size needs to be considered for total local items (TILE_SIZE*TILE_SIZE)
+            size_t tile_size = 16; // Common tile size
+            while(tile_size * tile_size > max_work_group_size && tile_size > 1) { // Ensure tile fits
+                tile_size /= 2;
             }
-            
-            // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, matmul_float_kernel, 2, nullptr,
-                                          global_size, local_size, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Read result
-            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(float) * a_rows * b_cols, result, 0, nullptr, nullptr);
-            if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
-                return false;
-            }
-            
-            // Clean up
-            clReleaseMemObject(a_buffer);
-            clReleaseMemObject(b_buffer);
-            clReleaseMemObject(result_buffer);
-            
+            if (tile_size == 0) tile_size = 1; // Fallback if max_work_group_size is tiny
+
+            error |= clSetKernelArg(matmul_float_kernel, 6, sizeof(float) * tile_size * tile_size, nullptr); // tileA
+            error |= clSetKernelArg(matmul_float_kernel, 7, sizeof(float) * tile_size * tile_size, nullptr); // tileB
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to set kernel args: " << error << std::endl; throw; }
+
+            size_t global_work_size[2] = { (size_t)((b_cols + tile_size - 1) / tile_size) * tile_size, 
+                                           (size_t)((a_rows + tile_size - 1) / tile_size) * tile_size }; 
+            size_t local_work_size[2] = { tile_size, tile_size };
+
+            error = clEnqueueNDRangeKernel(queue, matmul_float_kernel, 2, nullptr, global_work_size, local_work_size, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to enqueue kernel: " << error << std::endl; throw; }
+
+            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0, size_result, result_data, 0, nullptr, nullptr);
+            if (error != CL_SUCCESS) { std::cerr << "multiplyMatrices: Failed to read buffer: " << error << std::endl; throw; }
+
+            clReleaseMemObject(a_buffer); a_buffer = nullptr;
+            clReleaseMemObject(b_buffer); b_buffer = nullptr;
+            clReleaseMemObject(result_buffer); result_buffer = nullptr;
             return true;
-            
-        } catch (const std::exception& e) {
-            std::cerr << "OpenCL matrix multiplication failed: " << e.what() << std::endl;
+
+        } catch (...) {
+            if (a_buffer) clReleaseMemObject(a_buffer);
+            if (b_buffer) clReleaseMemObject(b_buffer);
+            if (result_buffer) clReleaseMemObject(result_buffer);
             return false;
         }
     }
-    
-    // Matrix-matrix multiplication - double version
-    static bool multiplyMatrices(const double* a, int a_rows, int a_cols,
-                               const double* b, int b_rows, int b_cols,
-                               double* result) {
-        if (!cl_available || !has_double_support) return false;
-        if (a_cols != b_rows) return false;
+
+    // Matrix-vector multiplication: result_vec = matrix * vector
+    static bool multiplyMatrixVector(const float* matrix_data, int matrix_rows, int matrix_cols,
+                                     const float* vector_data, float* result_vector_data) {
+        // Reuse multiplyMatrices by treating vector as a matrix_cols x 1 matrix
+        // The result will be a matrix_rows x 1 matrix (which is our result_vector_data)
+        return multiplyMatrices(matrix_data, matrix_rows, matrix_cols, 
+                              vector_data, matrix_cols, 1, 
+                              result_vector_data);
+    }
+
+    // Execute prep_vec operation using OpenCL
+    static bool prepVecGPU(const float* image_vec, int image_width, int image_height, 
+                          float* result, int filter_size, int stride, int padding) {
+        if (!initialize() || !cl_available) {
+            return false;
+        }
         
         std::lock_guard<std::mutex> lock(cl_mutex);
         
         try {
-            cl_int error;
+            // Calculate dimensions
+            int num_submatrices_x = (image_width + 2 * padding - filter_size) / stride + 1;
+            int num_submatrices_y = (image_height + 2 * padding - filter_size) / stride + 1;
+            int total_submatrices = num_submatrices_x * num_submatrices_y;
+            int result_size = total_submatrices * filter_size * filter_size;
+            
+            // Check if the operation exceeds device capabilities
+            size_t input_size = sizeof(float) * image_width * image_height;
+            size_t output_size = sizeof(float) * result_size;
+            
+            if (input_size > max_mem_alloc_size || output_size > max_mem_alloc_size) {
+                return false;
+            }
             
             // Create buffers
-            cl_mem a_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * a_rows * a_cols, (void*)a, &error);
-            if (error != CL_SUCCESS) return false;
-            
-            cl_mem b_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                                           sizeof(double) * b_rows * b_cols, (void*)b, &error);
+            cl_int error;
+            cl_mem input_buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                                                input_size, (void*)image_vec, &error);
             if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
+                std::cerr << "Failed to create input buffer for prep_vec: " << error << std::endl;
                 return false;
             }
             
-            cl_mem result_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
-                                                sizeof(double) * a_rows * b_cols, nullptr, &error);
+            cl_mem output_buffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY,
+                                                output_size, nullptr, &error);
             if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
+                clReleaseMemObject(input_buffer);
+                std::cerr << "Failed to create output buffer for prep_vec: " << error << std::endl;
                 return false;
             }
-            
-            // Determine tile size for local memory (usually 16x16 or 32x32)
-            size_t tile_size = 16;
-            size_t local_size[2] = {tile_size, tile_size};
-            size_t global_size[2] = {
-                ((b_cols + tile_size - 1) / tile_size) * tile_size,
-                ((a_rows + tile_size - 1) / tile_size) * tile_size
-            };
             
             // Set kernel arguments
-            error = clSetKernelArg(matmul_double_kernel, 0, sizeof(cl_mem), &a_buffer);
-            error |= clSetKernelArg(matmul_double_kernel, 1, sizeof(cl_mem), &b_buffer);
-            error |= clSetKernelArg(matmul_double_kernel, 2, sizeof(cl_mem), &result_buffer);
-            error |= clSetKernelArg(matmul_double_kernel, 3, sizeof(int), &a_rows);
-            error |= clSetKernelArg(matmul_double_kernel, 4, sizeof(int), &a_cols);
-            error |= clSetKernelArg(matmul_double_kernel, 5, sizeof(int), &b_cols);
-            error |= clSetKernelArg(matmul_double_kernel, 6, sizeof(double) * tile_size * tile_size, nullptr);
-            error |= clSetKernelArg(matmul_double_kernel, 7, sizeof(double) * tile_size * tile_size, nullptr);
+            error = clSetKernelArg(prep_vec_float_kernel, 0, sizeof(cl_mem), &input_buffer);
+            error |= clSetKernelArg(prep_vec_float_kernel, 1, sizeof(cl_mem), &output_buffer);
+            error |= clSetKernelArg(prep_vec_float_kernel, 2, sizeof(int), &image_width);
+            error |= clSetKernelArg(prep_vec_float_kernel, 3, sizeof(int), &image_height);
+            error |= clSetKernelArg(prep_vec_float_kernel, 4, sizeof(int), &filter_size);
+            error |= clSetKernelArg(prep_vec_float_kernel, 5, sizeof(int), &stride);
+            error |= clSetKernelArg(prep_vec_float_kernel, 6, sizeof(int), &padding);
+            error |= clSetKernelArg(prep_vec_float_kernel, 7, sizeof(int), &num_submatrices_x);
+            error |= clSetKernelArg(prep_vec_float_kernel, 8, sizeof(int), &num_submatrices_y);
             
             if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
+                clReleaseMemObject(input_buffer);
+                clReleaseMemObject(output_buffer);
+                std::cerr << "Failed to set kernel arguments for prep_vec: " << error << std::endl;
                 return false;
             }
             
             // Execute kernel
-            error = clEnqueueNDRangeKernel(queue, matmul_double_kernel, 2, nullptr,
-                                          global_size, local_size, 0, nullptr, nullptr);
+            size_t global_size = total_submatrices;
+            size_t local_size = std::min(max_work_group_size, (size_t)256); // Adjust based on hardware
+            
+            error = clEnqueueNDRangeKernel(queue, prep_vec_float_kernel, 1, nullptr,
+                                         &global_size, &local_size, 0, nullptr, nullptr);
             if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
+                clReleaseMemObject(input_buffer);
+                clReleaseMemObject(output_buffer);
+                std::cerr << "Failed to execute prep_vec kernel: " << error << std::endl;
                 return false;
             }
             
-            // Read result
-            error = clEnqueueReadBuffer(queue, result_buffer, CL_TRUE, 0,
-                                       sizeof(double) * a_rows * b_cols, result, 0, nullptr, nullptr);
+            // Read results
+            error = clEnqueueReadBuffer(queue, output_buffer, CL_TRUE, 0,
+                                     output_size, result, 0, nullptr, nullptr);
             if (error != CL_SUCCESS) {
-                clReleaseMemObject(a_buffer);
-                clReleaseMemObject(b_buffer);
-                clReleaseMemObject(result_buffer);
+                clReleaseMemObject(input_buffer);
+                clReleaseMemObject(output_buffer);
+                std::cerr << "Failed to read results from prep_vec: " << error << std::endl;
                 return false;
             }
             
-            // Clean up
-            clReleaseMemObject(a_buffer);
-            clReleaseMemObject(b_buffer);
-            clReleaseMemObject(result_buffer);
+            // Cleanup
+            clReleaseMemObject(input_buffer);
+            clReleaseMemObject(output_buffer);
             
             return true;
             
         } catch (const std::exception& e) {
-            std::cerr << "OpenCL matrix multiplication failed: " << e.what() << std::endl;
+            std::cerr << "OpenCL prepVecGPU operation failed: " << e.what() << std::endl;
             return false;
         }
-    }
-    
-    // Matrix-vector multiplication - float version
-    static bool multiplyMatrixVector(const float* matrix, int rows, int cols,
-                                   const float* vector, float* result) {
-        if (!cl_available) return false;
-        
-        // Use the matrix-matrix multiplication function for simplicity
-        return multiplyMatrices(matrix, rows, cols, vector, cols, 1, result);
-    }
-    
-    // Matrix-vector multiplication - double version
-    static bool multiplyMatrixVector(const double* matrix, int rows, int cols,
-                                   const double* vector, double* result) {
-        if (!cl_available || !has_double_support) return false;
-        
-        // Use the matrix-matrix multiplication function for simplicity
-        return multiplyMatrices(matrix, rows, cols, vector, cols, 1, result);
     }
     
     // Clean up resources
@@ -1097,7 +1120,10 @@ public:
                 clReleaseKernel(vec_add_float_kernel);
                 vec_add_float_kernel = nullptr;
             }
-            
+            if (vec_sub_float_kernel) {
+                clReleaseKernel(vec_sub_float_kernel);
+                vec_sub_float_kernel = nullptr;
+            }
             if (vec_mult_float_kernel) {
                 clReleaseKernel(vec_mult_float_kernel);
                 vec_mult_float_kernel = nullptr;
@@ -1113,26 +1139,19 @@ public:
                 matmul_float_kernel = nullptr;
             }
             
-            if (has_double_support) {
-                if (vec_add_double_kernel) {
-                    clReleaseKernel(vec_add_double_kernel);
-                    vec_add_double_kernel = nullptr;
-                }
-                
-                if (vec_mult_double_kernel) {
-                    clReleaseKernel(vec_mult_double_kernel);
-                    vec_mult_double_kernel = nullptr;
-                }
-                
-                if (vec_dot_double_kernel) {
-                    clReleaseKernel(vec_dot_double_kernel);
-                    vec_dot_double_kernel = nullptr;
-                }
-                
-                if (matmul_double_kernel) {
-                    clReleaseKernel(matmul_double_kernel);
-                    matmul_double_kernel = nullptr;
-                }
+            if (outer_prod_float_kernel) {
+                clReleaseKernel(outer_prod_float_kernel);
+                outer_prod_float_kernel = nullptr;
+            }
+            
+            if (prep_vec_float_kernel) {
+                clReleaseKernel(prep_vec_float_kernel);
+                prep_vec_float_kernel = nullptr;
+            }
+            
+            if (vec_scale_float_kernel) {
+                clReleaseKernel(vec_scale_float_kernel);
+                vec_scale_float_kernel = nullptr;
             }
             
             if (program) {
@@ -1171,18 +1190,17 @@ cl_command_queue OpenCLAccelerator::queue = nullptr;
 cl_program OpenCLAccelerator::program = nullptr;
 
 cl_kernel OpenCLAccelerator::vec_add_float_kernel = nullptr;
-cl_kernel OpenCLAccelerator::vec_add_double_kernel = nullptr;
+cl_kernel OpenCLAccelerator::vec_sub_float_kernel = nullptr;
 cl_kernel OpenCLAccelerator::vec_mult_float_kernel = nullptr;
-cl_kernel OpenCLAccelerator::vec_mult_double_kernel = nullptr;
 cl_kernel OpenCLAccelerator::vec_dot_float_kernel = nullptr;
-cl_kernel OpenCLAccelerator::vec_dot_double_kernel = nullptr;
 cl_kernel OpenCLAccelerator::matmul_float_kernel = nullptr;
-cl_kernel OpenCLAccelerator::matmul_double_kernel = nullptr;
+cl_kernel OpenCLAccelerator::outer_prod_float_kernel = nullptr;
+cl_kernel OpenCLAccelerator::prep_vec_float_kernel = nullptr;
+cl_kernel OpenCLAccelerator::vec_scale_float_kernel = nullptr;
 
 std::mutex OpenCLAccelerator::cl_mutex;
 std::atomic<bool> OpenCLAccelerator::initialized(false);
 size_t OpenCLAccelerator::max_work_group_size = 0;
 size_t OpenCLAccelerator::max_compute_units = 0;
 size_t OpenCLAccelerator::max_mem_alloc_size = 0;
-bool OpenCLAccelerator::has_double_support = false;
-int OpenCLAccelerator::gpu_threshold = 256;  // Default value 
+int OpenCLAccelerator::gpu_threshold = 256;  // Default value

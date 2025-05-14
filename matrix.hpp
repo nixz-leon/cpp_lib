@@ -147,6 +147,8 @@ class matrix {
         inline void row_add(int a, int b, T fac); 
         inline matrix<T> operator/=(T c);
         inline matrix<T> operator *=(T c);
+        inline matrix<T>& operator+=(const matrix<T>& other);
+        inline matrix<T>& operator-=(const matrix<T>& other);
         inline vec<T> operator*(vec<T> b);
         inline vec<T> operator*(vec<T> b) const;
         inline friend vec<T> vectorize(matrix<T> a){
@@ -169,15 +171,19 @@ class matrix {
         };
         inline friend matrix<T> operator+(matrix<T> a, matrix<T> b){
             if((a.col!=b.col)||(a.row!=b.row)){std::cout << "Tried to add a " << a.row << ','<<a.col<< " matrix with a " << b.row << ',' << b.col << " matrix\n";exit(0);}
-            matrix temp(a);
-            for(int i =0; i < a.row;i++){for(int j = 0; j < a.col;j++){temp(i,j)=a(i,j)+b(i,j);}}
-            return temp;
+            matrix<T> result(a.row, a.col);
+            for(int i = 0; i < a.row * a.col; ++i){
+                result.data[i] = a.data[i] + b.data[i];
+            }
+            return result;
         };
         inline friend matrix<T> operator-(matrix<T> a, matrix<T> b){
             if((a.col!=b.col)||(a.row!=b.row)){std::cout << "Tried to subtract a " << b.row << ','<<b.col<< " matrix from a " << a.row << ',' << a.col << " matrix\n";exit(0);}
-            matrix temp(a);
-            for(int i =0; i < a.row;i++){for(int j = 0; j < a.col;j++){temp(i,j)=a(i,j)-b(i,j);}}
-            return temp;
+            matrix<T> result(a.row, a.col);
+            for(int i = 0; i < a.row * a.col; ++i){
+                result.data[i] = a.data[i] - b.data[i];
+            }
+            return result;
         };
         inline friend matrix<T> operator*(matrix<T> a, matrix<T> b) {
             if (a.col != b.row) {
@@ -472,6 +478,46 @@ template <typename T>
 inline matrix<T> matrix<T>::operator*=(T c)
 {
     for(int i=0;i<this->row*this->col;i++){this->data[i]*=c;}
+    return *this;
+}
+
+template <typename T>
+inline matrix<T>& matrix<T>::operator+=(const matrix<T>& other)
+{
+    if (this->row != other.row || this->col != other.col) {
+        std::cout << "Error: Tried to add-assign matrices of incompatible dimensions. "
+                  << " LHS: " << this->row << 'x' << this->col
+                  << ", RHS: " << other.row << 'x' << other.col << "\n";
+        exit(0); // Or throw an exception
+    }
+    if(this->data == nullptr || other.data == nullptr){
+        std::cout << "Error: One or both matrices in += have null data\n";
+        exit(0); // Or throw an exception
+    }
+    #pragma omp parallel for simd // Basic parallelization
+    for (int i = 0; i < this->row * this->col; ++i) {
+        this->data[i] += other.data[i];
+    }
+    return *this;
+}
+
+template <typename T>
+inline matrix<T>& matrix<T>::operator-=(const matrix<T>& other)
+{
+    if (this->row != other.row || this->col != other.col) {
+        std::cout << "Error: Tried to subtract-assign matrices of incompatible dimensions. "
+                  << " LHS: " << this->row << 'x' << this->col
+                  << ", RHS: " << other.row << 'x' << other.col << "\n";
+        exit(0); // Or throw an exception
+    }
+    if(this->data == nullptr || other.data == nullptr){
+        std::cout << "Error: One or both matrices in -= have null data\n";
+        exit(0); // Or throw an exception
+    }
+    #pragma omp parallel for simd // Basic parallelization
+    for (int i = 0; i < this->row * this->col; ++i) {
+        this->data[i] -= other.data[i];
+    }
     return *this;
 }
 

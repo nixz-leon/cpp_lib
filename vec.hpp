@@ -226,10 +226,141 @@ class vec {
         }
 
         inline vec<T> operator+=(const vec<T>& other){
-            *this = *this + other;
+            if (this->data == nullptr || other.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
+                exit(0);
+            }
+            if (this->size != other.size) {
+                std::cout << "Error: Tried to add a vector of size " << this->size
+                          << " with a vector of size " << other.size << "\n";
+                exit(0);
+            }
+
+            // Use hardware acceleration if available
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(this->size)) {
+                        // For in-place, we need a temporary buffer for 'this->data' if the OpenCL kernel
+                        // cannot guarantee safe in-place operation or if we want to reuse the addVectors kernel
+                        // which takes two inputs and one output.
+                        // A true in-place OpenCL kernel would be ideal: void addInPlace(T* a, const T* b, int size);
+                        // Assuming addVectors(a,b,result,size) cannot write result to a or b directly if they overlap.
+                        // So, we use addVectors and copy back, or implement CPU path.
+                        // For simplicity here, let's fall through to CPU if direct in-place OpenCL is not straightforwardly available
+                        // OR, if addVectors can handle it, result.data could be this->data.
+                        // Let's assume for now addVectors needs distinct output, so OpenCL path will be similar to operator+
+                        // and then we copy. Or, we can just use CPU path for += to avoid this complexity if
+                        // direct in-place OpenCL is not available.
+                        // A more robust solution would be an OpenCL kernel specifically for in-place addition.
+                        // Given the current OpenCLAccelerator::addVectors, it's safer to perform on CPU or use a temporary result.
+                        // To avoid allocation here, let's implement the CPU paths directly for in-place.
+                    }
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "OpenCL check failed during +=, proceeding with CPU: " << e.what() << std::endl;
+            }
+
+
+            // Use multithreaded CPU implementation for larger vectors
+            if (this->size >= OpenCLAccelerator::getThreadThreshold()) {
+                const int block = OpenCLAccelerator::getCacheBlockSize();
+                int num_threads = std::min(
+                    static_cast<int>(std::thread::hardware_concurrency()),
+                    (this->size + block - 1) / block
+                );
+                std::vector<std::thread> threads;
+                threads.reserve(num_threads);
+                
+                auto add_block_inplace = [&](int start_idx, int end_idx) {
+                    #pragma omp simd
+                    for (int i = start_idx; i < end_idx; i++) {
+                        this->data[i] += other.data[i];
+                    }
+                };
+                
+                const int elements_per_thread = (this->size + num_threads - 1) / num_threads;
+                for (int t = 0; t < num_threads; ++t) {
+                    const int start_idx = t * elements_per_thread;
+                    const int end_idx = std::min(start_idx + elements_per_thread, this->size);
+                    if (start_idx < end_idx) {
+                        threads.emplace_back(add_block_inplace, start_idx, end_idx);
+                    }
+                }
+                for (auto& thread : threads) {
+                    thread.join();
+                }
+            } else { // Use sequential implementation for smaller vectors
+                #pragma omp simd
+                for (int i = 0; i < this->size; i++) {
+                    this->data[i] += other.data[i];
+                }
+            }
             return *this;
         }
         
+        inline vec<T> operator-=(const vec<T>& other){
+            if (this->data == nullptr || other.data == nullptr) {
+                std::cout << "Error: vector is empty\n";
+                exit(0);
+            }
+            if (this->size != other.size) {
+                std::cout << "Error: Tried to subtract a vector of size " << this->size
+                          << " from a vector of size " << other.size << "\n";
+                exit(0);
+            }
+
+            // OpenCL path consideration: Similar to operator+=, a dedicated in-place OpenCL kernel
+            // for subtraction (e.g., subtractInPlace(T* a, const T* b, int size)) would be optimal.
+            // For now, we fall back to CPU for in-place to avoid allocation issues with addVectors-like kernels.
+            // try {
+            //     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+            //         if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(this->size)) {
+            //             // Potentially use OpenCLAccelerator::addVectors with negated 'other' if it can operate in-place on 'this'.
+            //             // Or, ideally, an OpenCLAccelerator::subtractVectorsInPlace(this->data, other.data, this->size)
+            //             // If not possible without allocation, rely on CPU path below.
+            //         }
+            //     }
+            // } catch (const std::exception& e) {
+            //     std::cerr << "OpenCL check failed during -=, proceeding with CPU: " << e.what() << std::endl;
+            // }
+
+            // Use multithreaded CPU implementation for larger vectors
+            if (this->size >= OpenCLAccelerator::getThreadThreshold()) {
+                const int block = OpenCLAccelerator::getCacheBlockSize();
+                int num_threads = std::min(
+                    static_cast<int>(std::thread::hardware_concurrency()),
+                    (this->size + block - 1) / block
+                );
+                std::vector<std::thread> threads;
+                threads.reserve(num_threads);
+                
+                auto subtract_block_inplace = [&](int start_idx, int end_idx) {
+                    #pragma omp simd
+                    for (int i = start_idx; i < end_idx; i++) {
+                        this->data[i] -= other.data[i];
+                    }
+                };
+                
+                const int elements_per_thread = (this->size + num_threads - 1) / num_threads;
+                for (int t = 0; t < num_threads; ++t) {
+                    const int start_idx = t * elements_per_thread;
+                    const int end_idx = std::min(start_idx + elements_per_thread, this->size);
+                    if (start_idx < end_idx) {
+                        threads.emplace_back(subtract_block_inplace, start_idx, end_idx);
+                    }
+                }
+                for (auto& thread : threads) {
+                    thread.join();
+                }
+            } else { // Use sequential implementation for smaller vectors
+                #pragma omp simd
+                for (int i = 0; i < this->size; i++) {
+                    this->data[i] -= other.data[i];
+                }
+            }
+            return *this;
+        }
+
         inline friend vec<T> operator-(const vec<T>& a, const vec<T>& b) {
             if (a.data == nullptr || b.data == nullptr) {
                 std::cout << "Error: vector is empty\n";
@@ -345,7 +476,7 @@ class vec {
                 if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
                     if (OpenCLAccelerator::isOpenCLAvailable() && OpenCLAccelerator::shouldUseGPU(a.size)) {
                         vec<T> result(a.size);
-                        bool success = OpenCLAccelerator::multiplyVectors(
+                        bool success = OpenCLAccelerator::elementMultiply(
                             a.data, b.data, result.data, a.size
                         );
                         
