@@ -32,6 +32,7 @@ public:
     vecs<T> subset(int start_col, int end_col) const;
     vec<T> vectorize();
     vec<T> vectorize() const;
+    T sum() const;
 };
 
 // Default constructor
@@ -181,6 +182,15 @@ vec<T> vecs<T>::vectorize() const {
         }
     }
     return result;  
+}
+
+template <class T>
+T vecs<T>::sum() const{
+    T sum = T();
+    for (int i = 0; i < num_vecs; i++) {
+        sum += vectors[i].sum();
+    }
+    return sum;
 }
 
 template <typename T>

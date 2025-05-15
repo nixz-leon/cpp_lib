@@ -10,6 +10,7 @@
 #include <cmath>  // For isnan() and isinf()
 #include <random>
 #include <memory>
+#include <unordered_map>
 
 
 
@@ -53,24 +54,49 @@ class act_func_vec{
         }
         static vec<float> sigmoid_deriv(vec<float> &v){
             vec<float> result(v.size, 1.0f);
-            result = element_mult(sigmoid(v), result-sigmoid(v));
+            vec<float> sigmoid_result = sigmoid(v);
+            result = element_mult(sigmoid_result, result-sigmoid_result);
             return result;
         }
         static vec<float> softmax(vec<float> &v){
             vec<float> result(v.size);
+            float max_val = v(0);
+            
+            // Find max value for numerical stability
+            for(int i = 1; i < v.size; i++){
+                if(v(i) > max_val) max_val = v(i);
+            }
+            
             float sum = 0.0f;
+            // Compute exponentials with subtracted max value
             for(int i = 0; i < v.size; i++){
-                result(i) = exp(v(i));
+                result(i) = exp(v(i) - max_val);
                 sum += result(i);
             }
+            
+            // Normalize
+            float inv_sum = 1.0f / sum;
             for(int i = 0; i < v.size; i++){
-                result(i) = result(i)/sum;
+                result(i) *= inv_sum;
             }
+            
             return result;
         }
+        
+        // Calculate softmax and its derivative together for efficiency
+        static std::pair<vec<float>, vec<float>> softmax_and_deriv(vec<float> &v){
+            vec<float> softmax_result = softmax(v);
+            vec<float> deriv_result(v.size, 1.0f);
+            deriv_result = element_mult(softmax_result, deriv_result-softmax_result);
+            return {softmax_result, deriv_result};
+        }
+        
         static vec<float> softmax_deriv(vec<float> &v){
+            // Instead of recalculating softmax, we could memoize the result
+            // but for now, just calculate the derivative directly
+            vec<float> softmax_result = softmax(v);
             vec<float> result(v.size, 1.0f);
-            result = element_mult(softmax(v), result-softmax(v));
+            result = element_mult(softmax_result, result-softmax_result);
             return result;
         }
         static vec<float> linear(vec<float> &v){
@@ -81,20 +107,36 @@ class act_func_vec{
         }
         vec<float> (*act_funcs[5])(vec<float>&)={relu, leaky_relu, sigmoid, softmax, linear};
         vec<float> (*act_derivs[5])(vec<float>&)={relu_deriv, leaky_relu_deriv, sigmoid_deriv, softmax_deriv, linear_deriv};
+        
+        // Cache for storing previously computed activations to avoid recalculation
+        mutable std::unordered_map<int, vec<float>> activation_cache;
+        
     public:
+        act_func_vec(){
+            // Clear cache on construction
+            activation_cache.clear();
+        }
+        
         vec<float> operator()(vec<float> &v, int call){
             return act_funcs[call](v);
         }
+        
         vec<float> deriv(vec<float> &v, int call){
             return act_derivs[call](v);
         }
+        
         vecs<float> operator()(vecs<float> &v, int call){
+            // Process in batches for better performance
+            #pragma omp parallel for
             for(int i = 0; i < v.num_of_vecs(); i++){
                 v(i) = act_funcs[call](v(i));
             }
             return v;
         }
+        
         vecs<float> deriv(vecs<float> &v, int call){
+            // Process in batches for better performance
+            #pragma omp parallel for
             for(int i = 0; i < v.num_of_vecs(); i++){
                 v(i) = act_derivs[call](v(i));
             }
@@ -255,6 +297,7 @@ class conv_layer : public layer{
     vecs<float> delta;
     int call;
     act_func_vec act_func;
+    int num_outputs;
     public:
     conv_layer(int input_size_x, int input_size_y, int output_size_x, int output_size_y, int num_of_inputs, int num_of_filters, int filter_size, int stride, int padding, std::string activation_func){
         this->input_size_x = input_size_x;
@@ -266,6 +309,7 @@ class conv_layer : public layer{
         this->filter_size = filter_size;
         this->stride = stride;
         this->padding = padding;
+        this->num_outputs = num_of_filters * num_of_inputs;
 
         // example weight matrix: 2 2x2 filters:
         // f11 f12 f13 f14
@@ -284,7 +328,7 @@ class conv_layer : public layer{
         bias = vec<float>(num_of_filters);
         init_vec(bias);
 
-        int num_outputs = num_of_filters * num_of_inputs;
+        
 
         int num_submatrices_x = (input_size_x + 2 * padding - filter_size) / stride + 1;
         int num_submatrices_y = (input_size_y + 2 * padding - filter_size) / stride + 1;
@@ -306,9 +350,14 @@ class conv_layer : public layer{
     }
 
     vecs<float> forward(const vecs<float>& in) override {
-        input = in;
-        for(int i = 0; i < input.num_of_vecs(); i++) {    
-            input_matricies(i) = prep_vec(input(i), input_size_x, input_size_y, filter_size, stride, padding);
+        // Create a local copy of the input instead of modifying the class member
+        vecs<float> local_input = in;
+        
+        for(int i = 0; i < local_input.num_of_vecs(); i++) {
+            //std::cout << "foward \n";    
+            //std::cout << "input: " << local_input(i).sum() << std::endl;
+            input_matricies(i) = prep_vec(local_input(i), input_size_x, input_size_y, filter_size, stride, padding);
+            //std::cout << "input matricies: " << input_matricies(i).sum_elms() << std::endl;
             // Apply all filters to the current input
             // the line above for a matrix with 2x2 filter and a stride of 1 and a padding of 0:
             // 1 2 3
@@ -342,6 +391,9 @@ class conv_layer : public layer{
             // output(3) = image(1) with filter(1) applied to it
         }
         
+        // Store the input as the last step to preserve it for backpropagation
+        input = in;
+        
         output = act_func(preactivation, call);
         
         return output;
@@ -350,47 +402,94 @@ class conv_layer : public layer{
     //this function is cancer and needs to be optimized
     vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) override {
         vecs<float> temp_delta(prev_delta.num_of_vecs(), prev_weight.size_row());
+        
         if(prev_layer_type == "pool"){
             //delta is a vecs of size num_of_filters * num_of_inputs
             for(int i = 0; i < prev_delta.num_of_vecs(); i++){
-                delta(i) = transpose(prev_weight(i)) * prev_delta(i);
+                delta(i) = transpose_multiply_vec(prev_weight(i), prev_delta(i));
                 delta(i) = element_mult(delta(i), act_func.deriv(preactivation(i), call));
+                
+                // Check for NaN values
+                for(int j = 0; j < delta(i).size; j++) {
+                    if(std::isnan(delta(i)(j))) {
+                        delta(i)(j) = 0.0f; // Replace NaN with zero
+                        std::cout << "NaN detected in gradient (pool layer) - replaced with 0" << std::endl;
+                    }
+                }
             }
         }
         else if(prev_layer_type == "conv"){
-            //the error here is Invalid matrix dimensions
-            //this error is thrown in matrix matrix multiplication
             int prev_num_of_filters = prev_weight.size();
-            int num_of_outputs = prev_delta.num_of_vecs();
-            matrix<float> temp_weight(prev_weight.size_row(), prev_weight.size_col());
-            // Apply each weight matrix to all deltas
-            // need to think of a good way to parallelize this
+            
+            
+            // Initialize delta to zero
+            for(int i = 0; i < delta.num_of_vecs(); i++) {
+                for(int j = 0; j < delta(i).size; j++) {
+                    delta(i)(j) = 0.0f;
+                }
+            }
+            
+            // Process each filter weight matrix
             for(int i = 0; i < prev_num_of_filters; i++) {
-                temp_weight = transpose(prev_weight(i));
-                for(int j = 0; j < num_of_outputs; j++) {
-                    temp_delta(j) = temp_weight * prev_delta(j);
-                    temp_delta(j) = element_mult(temp_delta(j), act_func.deriv(preactivation(j/prev_num_of_filters), call));
-                    delta(j/prev_num_of_filters) += temp_delta(j);
+        
+                
+                // For each delta
+                for(int j = 0; j < num_outputs; j++) {
+                    // Check matrix dimensions before multiplication
+                    
+                    // Calculate input gradient
+                    temp_delta(j) = transpose_multiply_vec(prev_weight(i), prev_delta(j));
+                    
+                    // Apply activation derivative - use proper indexing
+                    int input_idx = j / prev_num_of_filters;
+                    if(input_idx < preactivation.num_of_vecs()) {
+                        temp_delta(j) = element_mult(temp_delta(j), act_func.deriv(preactivation(input_idx), call));
+                        
+                        // Accumulate gradients
+                        delta(input_idx) += temp_delta(j);
+                    }
+                }
+            }
+            
+            // Check for NaN or infinity and apply gradient clipping
+            float gradient_clip_threshold = 1.0f;
+            for(int i = 0; i < delta.num_of_vecs(); i++) {
+                for(int j = 0; j < delta(i).size; j++) {
+                    if(std::isnan(delta(i)(j)) || std::isinf(delta(i)(j))) {
+                        delta(i)(j) = 0.0f;
+                        std::cout << "NaN/Inf detected in gradient (conv layer) - replaced with 0" << std::endl;
+                    }
+                    else if(delta(i)(j) > gradient_clip_threshold) {
+                        delta(i)(j) = gradient_clip_threshold;
+                    }
+                    else if(delta(i)(j) < -gradient_clip_threshold) {
+                        delta(i)(j) = -gradient_clip_threshold;
+                    }
                 }
             }
         }else{
             std::cout << "prev layer type not supported: " << prev_layer_type << std::endl;
         }        
         
-        
-        
         return delta;
     }
     
     void update_params(float learning_rate) override {
         // Initialize gradient matrix with same dimensions as weights
-        matrix<float> grad(weights.row, weights.col);
+        matrix<float> grad(weights.col, weights.row);
         // For each input
         for(int i = 0; i < num_of_inputs; i++) {
             // For each filter
             for(int j = 0; j < num_of_filters; j++) {
                 // Get the delta for this input-filter combination
                 int delta_idx = i * num_of_filters + j;
+                
+                // Bounds check
+                if(delta_idx >= delta.num_of_vecs()) {
+                    std::cout << "Error: Delta index out of bounds in update_params" << std::endl;
+                    continue;
+                }
+                
                 vec<float> current_delta = delta(delta_idx);
                 
                 // Multiply delta with the corresponding input matrix
@@ -398,23 +497,61 @@ class conv_layer : public layer{
                 for(int k = 0; k < current_delta.size; k++) {
                     delta_matrix(k, j) = current_delta(k);
                 }
-                // Multiply input matrix with transposed delta matrix and add to gradient
+                
+                
+                
+                // Multiply input matrix with delta matrix and add to gradient
                 matrix<float> temp_grad = input_matricies(i) * delta_matrix;
-                grad = grad + transpose(temp_grad);
+                grad = grad + temp_grad; 
             }
         }
         
-        // Update weights by subtracting learning_rate * gradient
-        weights = weights - learning_rate * grad;
+        // Apply gradient clipping
+        float clip_threshold = 1.0f;
+        for(int i = 0; i < grad.row; i++) {
+            for(int j = 0; j < grad.col; j++) {
+                if(std::isnan(grad(i, j)) || std::isinf(grad(i, j))) {
+                    grad(i, j) = 0.0f;
+                    std::cout << "NaN/Inf detected in weight gradient - replaced with 0" << std::endl;
+                }
+                else if(grad(i, j) > clip_threshold) {
+                    grad(i, j) = clip_threshold;
+                }
+                else if(grad(i, j) < -clip_threshold) {
+                    grad(i, j) = -clip_threshold;
+                }
+            }
+        }
         
-        // Update biases
+        // Update weights
+        weights = weights - learning_rate * transpose(grad);
+        
+        // Update biases with bounds checking and gradient clipping
         for(int i = 0; i < num_of_inputs; i++) {
             for(int j = 0; j < num_of_filters; j++) {
                 int delta_idx = i * num_of_filters + j;
-                bias(j) -= learning_rate * delta(delta_idx).sum();
+                
+                // Bounds check
+                if(delta_idx < delta.num_of_vecs()) {
+                    float bias_grad = delta(delta_idx).sum();
+                    
+                    // Handle NaN/Inf and apply clipping
+                    if(std::isnan(bias_grad) || std::isinf(bias_grad)) {
+                        bias_grad = 0.0f;
+                        std::cout << "NaN/Inf detected in bias gradient - replaced with 0" << std::endl;
+                    }
+                    else if(bias_grad > clip_threshold) {
+                        bias_grad = clip_threshold;
+                    }
+                    else if(bias_grad < -clip_threshold) {
+                        bias_grad = -clip_threshold;
+                    }
+                    
+                    bias(j) -= learning_rate * bias_grad;
+                }
             }
         }
-    };
+    }
 
     vecs<float> calc_gradient_last(const vec<float>& actual, std::string loss_func) override {
         return vecs<float>();
@@ -586,7 +723,7 @@ class pool_layer : public layer{
     vecs<float> calc_gradient(const vecs<float>& prev_delta, const matricies<float>& prev_weight, std::string prev_layer_type) override {
         if(prev_layer_type == "dense"){
 // Batch training method for multiple examples
-            vec<float> temp = transpose(prev_weight(0))*(prev_delta.vectorize());
+            vec<float> temp = transpose_multiply_vec(prev_weight(0), prev_delta.vectorize());
             int num_deltas = input.num_of_vecs();
             int subdelta_size = max_pool_weights(0).row;  // Use column count of max_pool_weights
             delta = vecs<float>(num_deltas, subdelta_size);
@@ -695,7 +832,7 @@ class dense_layer : public layer{
         if(prev_layer_type == "dense"){
             delta = prev_delta.vectorize();
         }
-        delta = transpose(prev_weight(0))*delta;
+        delta = transpose_multiply_vec(prev_weight(0), delta);
         delta = element_mult(delta, act_func.deriv(preactivation, call));
         vecs<float> delta_vecs(1, delta.size);
         delta_vecs(0) = delta;
@@ -762,8 +899,8 @@ class NeuralNetwork{
     vec<float> forward(const vec<float>& input){
         vecs<float> current_input(1, input.size);
         current_input(0) = input;
-        for(auto& layer : layers){
-            current_input = layer->forward(current_input);
+        for(size_t i = 0; i < layers.size(); ++i){
+            current_input = layers[i]->forward(current_input);
         }
         return current_input.vectorize();
     }
@@ -795,15 +932,15 @@ class NeuralNetwork{
         }
         
         // Update parameters for all layers
-        for (auto& layer : layers) {
-            
-            layer->update_params(learning_rate);
+        for (size_t i = 0; i < layers.size(); ++i) {
+            layers[i]->update_params(learning_rate);
         }
     }
     
     // Simplified training method for single examples
     void train(const vec<float>& input, const vec<float>& target) {
         for (int epoch = 0; epoch < epochs; epoch++) {
+            std::cout << "Epoch " << epoch+1 << " of " << epochs << std::endl;
             backpropagation(input, target, loss_func, learning_rate);
         }
     }
@@ -843,18 +980,19 @@ class NeuralNetwork{
                 
                 // Actual backpropagation
                 backpropagation(input, target, loss_func, learning_rate);
-                if(i % 10 == 0){
-                    std::cout << "Sample" << i << "of" << num_samples << "Error" << sample_error << std::endl;
+                /*
+                if(i % 100 == 0){
+                    std::cout << "Sample " << i << " of " << num_samples << " Error: " << sample_error << std::endl;
                 }
+                */
             }
             
             // Calculate average error
             float avg_error = total_error / num_samples;
             
             // Print progress every 1000 epochs
-            if (epoch % 1 == 0) {
-                std::cout << "Epoch " << epoch << "/" << epochs << " - Error: " << avg_error << std::endl;
-            }
+            
+            std::cout << "Epoch " << epoch+1 << "/" << epochs << " - Error: " << avg_error << std::endl;
         }
     }
 

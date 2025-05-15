@@ -19,11 +19,36 @@ void read_csv(std::string filename, vecs<T> &vectors, bool header = false, char 
         std::stringstream ss(line);
         std::vector<T> row;
         std::string value;
-        while (std::getline(ss, value, delimiter)) { // Properly handling CSV format
-            std::stringstream valueStream(value);
-            T convertedValue;
-            valueStream >> convertedValue;
-            row.push_back(convertedValue);
+        while (std::getline(ss, value, delimiter)) {
+            // Trim whitespace
+            value.erase(0, value.find_first_not_of(" \t\r\n"));
+            value.erase(value.find_last_not_of(" \t\r\n") + 1);
+            
+            // Handle conversion with error checking
+            try {
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+                    // For floating-point types
+                    row.push_back(static_cast<T>(std::stod(value)));
+                } 
+                else if constexpr (std::is_same_v<T, int>) {
+                    // For integer type
+                    row.push_back(std::stoi(value));
+                }
+                else {
+                    // For other types, use stringstream
+                    std::stringstream valueStream(value);
+                    T convertedValue;
+                    if (!(valueStream >> convertedValue)) {
+                        throw std::runtime_error("Conversion failed");
+                    }
+                    row.push_back(convertedValue);
+                }
+            }
+            catch (const std::exception& e) {
+                std::cerr << "Warning: Could not convert value '" << value << "': " << e.what() << std::endl;
+                // Either skip, use default, or throw depending on requirements
+                row.push_back(T{}); // Default construct (zero for numeric types)
+            }
         }
         if (!row.empty()) {
             rows.push_back(row);
@@ -39,14 +64,22 @@ void read_csv(std::string filename, vecs<T> &vectors, bool header = false, char 
     std::cout << "Number of columns: " << num_cols << std::endl;
     int num_rows = rows.size();
     std::cout << "Number of rows: " << num_rows << std::endl;
+    
+    // Check if all rows have the same number of columns
+    for (size_t i = 1; i < rows.size(); i++) {
+        if (rows[i].size() != static_cast<size_t>(num_cols)) {
+            throw std::runtime_error("Inconsistent number of columns in CSV row " + std::to_string(i+1));
+        }
+    }
+    
     vecs<T> temp_vecs(num_cols, num_rows);
     for (int j = 0; j < num_cols; j++) {
         for (int i = 0; i < num_rows; i++) {
-            temp_vecs(j)(i) = rows[i][j];  // Ensure correct assignment
+            temp_vecs(j)(i) = rows[i][j];
         }
     }
     vectors = temp_vecs;
-};
+}
 
 
 //this function should take in a vector where each element is the class label, and return a vecs with num_of_vecs is equal to labels.size where there is a one in the index of the class label
@@ -117,9 +150,10 @@ void get_data(std::string filename, vecs<T> &data, vecs<T> &labels, bool header 
     
     data = data.subset(0, data.num_of_vecs() - 2);
     std::cout << data.num_of_vecs() << std::endl;
+    /*
     for(int i = 0; i < data.num_of_vecs(); i++){
         data(i) = normalize_data(data(i));
-    }
+    */
     data = switch_major_minor(data);
 }
 

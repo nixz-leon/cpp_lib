@@ -286,6 +286,14 @@ class matrix {
         inline bool shouldUseThreads() const {
             return (row * col) >= THREAD_SIZE_THRESHOLD;
         }
+
+        // Computes transpose(a) * b without explicitly creating the transpose
+        template <typename U>
+        friend matrix<U> transpose_multiply(const matrix<U>& a, const matrix<U>& b);
+        
+        // Computes transpose(a) * v without explicitly creating the transpose
+        template <typename U>
+        friend vec<U> transpose_multiply_vec(const matrix<U>& a, const vec<U>& v);
 };
 
 template <typename T>
@@ -688,4 +696,205 @@ inline void matrix<T>::add_per_col(vec<T> v){
             data[(i*col)+j] += v(i);
         }
     }
+}
+
+template <typename T>
+matrix<T> transpose_multiply(const matrix<T>& a, const matrix<T>& b) {
+    // Check dimensions for compatibility
+    if (a.row != b.row) {
+        std::cout << "Error: Incompatible dimensions for transpose_multiply. "
+                  << "Matrix A: " << a.row << "x" << a.col 
+                  << ", Matrix B: " << b.row << "x" << b.col << std::endl;
+        exit(0);
+    }
+    
+    // Result will have dimensions (a.col x b.col)
+    matrix<T> result(a.col, b.col);
+    
+    // Use hardware acceleration if available for float type
+    if constexpr (std::is_same_v<T, float>) {
+        try {
+            if (OpenCLAccelerator::isOpenCLAvailable() && 
+                OpenCLAccelerator::shouldUseGPU(a.col * b.col * a.row)) {
+                bool success = OpenCLAccelerator::transposeMultiplyMatrices(
+                    a.data, a.row, a.col,
+                    b.data, b.row, b.col,
+                    result.data
+                );
+                
+                if (success) {
+                    return result;
+                }
+                // Fall through to CPU implementation if GPU failed
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
+            // Fall through to CPU implementation
+        }
+    }
+    
+    const int block = CACHE_BLOCK_SIZE;
+    
+    // Check if we should use threaded implementation
+    if ((a.col * b.col * a.row) >= THREAD_SIZE_THRESHOLD * THREAD_SIZE_THRESHOLD) {
+        // Multi-threaded implementation
+        const int num_threads = std::min(
+            static_cast<int>(std::thread::hardware_concurrency()),
+            (a.col + block - 1) / block
+        );
+        
+        std::vector<std::thread> threads;
+        threads.reserve(num_threads);
+        
+        auto multiply_block = [&](int start_i, int end_i) {
+            // Cache blocking for better memory access patterns
+            for (int i = start_i; i < end_i; i += block) {
+                for (int j = 0; j < b.col; j += block) {
+                    for (int k = 0; k < a.row; k += block) {
+                        // Process each block
+                        for (int ii = i; ii < std::min(i + block, end_i); ++ii) {
+                            for (int jj = j; jj < std::min(j + block, b.col); ++jj) {
+                                T sum = 0;
+                                // The key difference: access a(k, i) instead of a(i, k)
+                                #pragma omp simd reduction(+:sum)
+                                for (int kk = k; kk < std::min(k + block, a.row); ++kk) {
+                                    sum += a.data[kk * a.col + ii] * b.data[kk * b.col + jj];
+                                }
+                                result.data[ii * b.col + jj] += sum;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        
+        // Distribute work among threads
+        const int cols_per_thread = (a.col + num_threads - 1) / num_threads;
+        
+        for (int t = 0; t < num_threads; ++t) {
+            const int start_col = t * cols_per_thread;
+            const int end_col = std::min(start_col + cols_per_thread, a.col);
+            if (start_col < end_col) {
+                threads.emplace_back(multiply_block, start_col, end_col);
+            }
+        }
+        
+        // Wait for all threads to complete
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    } else {
+        // Single-threaded implementation with cache blocking
+        for (int i = 0; i < a.col; i += block) {
+            for (int j = 0; j < b.col; j += block) {
+                for (int k = 0; k < a.row; k += block) {
+                    // Process each block
+                    for (int ii = i; ii < std::min(i + block, a.col); ++ii) {
+                        for (int jj = j; jj < std::min(j + block, b.col); ++jj) {
+                            T sum = 0;
+                            // The key difference: access a(k, i) instead of a(i, k)
+                            #pragma omp simd reduction(+:sum)
+                            for (int kk = k; kk < std::min(k + block, a.row); ++kk) {
+                                sum += a.data[kk * a.col + ii] * b.data[kk * b.col + jj];
+                            }
+                            result.data[ii * b.col + jj] += sum;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+// Implementation of transpose_multiply_vec
+template <typename T>
+vec<T> transpose_multiply_vec(const matrix<T>& a, const vec<T>& v) {
+    // Check dimensions for compatibility
+    if (a.row != v.size) {
+        std::cout << "Error: Incompatible dimensions for transpose_multiply_vec. "
+                  << "Matrix A: " << a.row << "x" << a.col 
+                  << ", Vector v: " << v.size << std::endl;
+        exit(0);
+    }
+    
+    // Result will have dimensions a.col
+    vec<T> result(a.col);
+    
+    // Use hardware acceleration if available for float type
+    if constexpr (std::is_same_v<T, float>) {
+        try {
+            if (OpenCLAccelerator::isOpenCLAvailable() && 
+                OpenCLAccelerator::shouldUseGPU(a.col * a.row)) {
+                bool success = OpenCLAccelerator::transposeMultiplyMatrixVector(
+                    a.data, v.data, result.data, a.row, a.col
+                );
+                
+                if (success) {
+                    return result;
+                }
+                // Fall through to CPU implementation if GPU failed
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "OpenCL acceleration failed, using CPU: " << e.what() << std::endl;
+            // Fall through to CPU implementation
+        }
+    }
+    
+    // Check if we should use threaded implementation
+    if (a.col * a.row >= THREAD_SIZE_THRESHOLD) {
+        // Multi-threaded implementation
+        const int num_threads = std::min(
+            static_cast<int>(std::thread::hardware_concurrency()),
+            (a.col + 63) / 64  // Use chunks of reasonable size
+        );
+        
+        std::vector<std::thread> threads;
+        threads.reserve(num_threads);
+        
+        auto process_columns = [&](int start_col, int end_col) {
+            for (int j = start_col; j < end_col; ++j) {
+                T sum = 0;
+                // For each element in column j, multiply by corresponding element in vector v
+                #pragma omp simd reduction(+:sum)
+                for (int i = 0; i < a.row; ++i) {
+                    // The key part - accessing a(i,j) which is the (j,i) element of the transpose
+                    sum += a.data[i * a.col + j] * v.data[i];
+                }
+                result.data[j] = sum;
+            }
+        };
+        
+        // Distribute work among threads
+        const int cols_per_thread = (a.col + num_threads - 1) / num_threads;
+        
+        for (int t = 0; t < num_threads; ++t) {
+            const int start_col = t * cols_per_thread;
+            const int end_col = std::min(start_col + cols_per_thread, a.col);
+            if (start_col < end_col) {
+                threads.emplace_back(process_columns, start_col, end_col);
+            }
+        }
+        
+        // Wait for all threads to complete
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    } else {
+        // Single-threaded optimized implementation
+        // For best cache performance, process one output element at a time
+        #pragma omp simd
+        for (int j = 0; j < a.col; ++j) {
+            T sum = 0;
+            // For each element in column j
+            for (int i = 0; i < a.row; ++i) {
+                // The key part - accessing a(i,j) which is the (j,i) element of the transpose
+                sum += a.data[i * a.col + j] * v.data[i];
+            }
+            result.data[j] = sum;
+        }
+    }
+    
+    return result;
 }

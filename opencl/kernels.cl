@@ -226,4 +226,59 @@ __kernel void prep_vec_kernel_float(
             result[result_idx] = value;
         }
     }
+}
+
+// Kernel for transposed matrix-matrix multiplication (A^T * B)
+__kernel void transpose_matmul_float(
+    __global const float* a,    // Input matrix A
+    __global const float* b,    // Input matrix B
+    __global float* c,          // Output matrix C = A^T * B
+    const int a_rows,           // Number of rows in A
+    const int a_cols,           // Number of columns in A
+    const int b_cols)           // Number of columns in B
+{
+    // Get global position in output matrix
+    const int row = get_global_id(0); // Row in A^T = Column in A
+    const int col = get_global_id(1); // Column in B
+    
+    // Check if we're within bounds
+    if (row < a_cols && col < b_cols) {
+        float sum = 0.0f;
+        
+        // Do the dot product of row of A^T with column of B
+        for (int k = 0; k < a_rows; k++) {
+            // A^T[row,k] = A[k,row] => a[k * a_cols + row]
+            // B[k,col] => b[k * b_cols + col]
+            sum += a[k * a_cols + row] * b[k * b_cols + col];
+        }
+        
+        // Store the result in C
+        c[row * b_cols + col] = sum;
+    }
+}
+
+// Kernel for transposed matrix-vector multiplication (A^T * v)
+__kernel void transpose_matvec_float(
+    __global const float* matrix,  // Input matrix A
+    __global const float* vector,  // Input vector v
+    __global float* result,        // Output vector result = A^T * v
+    const int matrix_rows,         // Number of rows in A
+    const int matrix_cols)         // Number of columns in A
+{
+    // Get global position (output element index)
+    const int col = get_global_id(0); // Column in A = Row in A^T
+    
+    // Check if we're within bounds
+    if (col < matrix_cols) {
+        float sum = 0.0f;
+        
+        // Do the dot product of column of A with vector v
+        for (int i = 0; i < matrix_rows; i++) {
+            // A^T[col,i] = A[i,col] => matrix[i * matrix_cols + col]
+            sum += matrix[i * matrix_cols + col] * vector[i];
+        }
+        
+        // Store the result
+        result[col] = sum;
+    }
 } 
