@@ -238,37 +238,68 @@ matrix<float> prep_vec(const vec<float>& image_vec, int image_width, int image_h
     int num_submatrices_y = (image_height + 2 * padding - filter_size) / stride + 1;
     int total_submatrices = num_submatrices_x * num_submatrices_y;
     
+    // Validate input parameters
+    if (image_vec.size < image_width * image_height) {
+        std::cerr << "Error: Image vector size (" << image_vec.size 
+                  << ") smaller than expected (" << image_width * image_height << ")" << std::endl;
+        // Return empty matrix or handle error
+        return matrix<float>(1, 1);
+    }
+    
+    if (num_submatrices_x <= 0 || num_submatrices_y <= 0 || total_submatrices <= 0) {
+        std::cerr << "Error: Invalid submatrix dimensions calculated" << std::endl;
+        // Return empty matrix or handle error
+        return matrix<float>(1, 1);
+    }
+    
     // Create the result matrix directly - each submatrix becomes a column
     // Rows = filter_size * filter_size, Cols = total_submatrices
     matrix<float> result(filter_size * filter_size, total_submatrices);
-    int start_index_x = 0 - padding;
-    int start_index_y = 0 - padding;
-    int submatrix_idx = 0;
-    for (int i = start_index_x; i + filter_size <= image_width + padding; i += stride) {
-        for (int j = start_index_y; j + filter_size <= image_height + padding; j += stride) {
-            // Process this submatrix directly into the appropriate column
-            for (int fi = 0; fi < filter_size; fi++) {
-                for (int fj = 0; fj < filter_size; fj++) {
-                    // Calculate original image coordinates
-                    int img_x = i + fi;
-                    int img_y = j + fj;
-                    
-                    // Value to store
-                    float value = 0.0f;
-                    
-                    // Check if within image bounds
-                    if (img_x >= 0 && img_x < image_width && img_y >= 0 && img_y < image_height) {
-                        value = image_vec(img_x * image_height + img_y);
+    
+    try {
+        int start_index_x = 0 - padding;
+        int start_index_y = 0 - padding;
+        int submatrix_idx = 0;
+        for (int i = start_index_x; i + filter_size <= image_width + padding; i += stride) {
+            for (int j = start_index_y; j + filter_size <= image_height + padding; j += stride) {
+                // Process this submatrix directly into the appropriate column
+                for (int fi = 0; fi < filter_size; fi++) {
+                    for (int fj = 0; fj < filter_size; fj++) {
+                        // Calculate original image coordinates
+                        int img_x = i + fi;
+                        int img_y = j + fj;
+                        
+                        // Value to store
+                        float value = 0.0f;
+                        
+                        // Check if within image bounds
+                        if (img_x >= 0 && img_x < image_width && img_y >= 0 && img_y < image_height) {
+                            int img_idx = img_x * image_height + img_y;
+                            if (img_idx < image_vec.size) {
+                                value = image_vec(img_idx);
+                            }
+                        }
+                        
+                        // Store directly in the matrix at row (fi*filter_size+fj), column (submatrix_idx)
+                        if (submatrix_idx < total_submatrices && (fi * filter_size + fj) < result.row) {
+                            result(fi * filter_size + fj, submatrix_idx) = value;
+                        }
                     }
-                    
-                    // Store directly in the matrix at row (fi*filter_size+fj), column (submatrix_idx)
-                    result(fi * filter_size + fj, submatrix_idx) = value;
+                }
+                
+                submatrix_idx++;
+                if (submatrix_idx >= total_submatrices) {
+                    break;  // Safety check
                 }
             }
-            
-            submatrix_idx++;
+            if (submatrix_idx >= total_submatrices) {
+                break;  // Safety check
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in prep_vec: " << e.what() << std::endl;
     }
+    
     return result;
 };
 
@@ -350,50 +381,29 @@ class conv_layer : public layer{
     }
 
     vecs<float> forward(const vecs<float>& in) override {
-        // Create a local copy of the input instead of modifying the class member
+        // Create a local copy of the input
         vecs<float> local_input = in;
         
+        // Process using CPU implementation
         for(int i = 0; i < local_input.num_of_vecs(); i++) {
-            //std::cout << "foward \n";    
-            //std::cout << "input: " << local_input(i).sum() << std::endl;
             input_matricies(i) = prep_vec(local_input(i), input_size_x, input_size_y, filter_size, stride, padding);
-            //std::cout << "input matricies: " << input_matricies(i).sum_elms() << std::endl;
-            // Apply all filters to the current input
-            // the line above for a matrix with 2x2 filter and a stride of 1 and a padding of 0:
-            // 1 2 3
-            // 4 5 6
-            // 7 8 9
-            // will return a matrix:
-            // 1 2 4 5  
-            // 2 3 5 6
-            // 4 5 7 8
-            // 5 6 8 9
-            // assume 2 filters f and e
-            // the weights matrix will be: 
-            // f1 f2 f3 f4
-            // e1 e2 e3 e4
-            // when you multiply weights * input_matricies(i) you will get a matrix of size 2x4
-            // where each row is the result of the filter applied to the image represented by input_maticies() which is a transfrom of the input vector
-            // which is just a image matrix flattened into a vector, via concatenating the rows one after the other
             
             // Apply all filters to the current input
             preactivation_matrix(i) = weights * input_matricies(i);
             
             preactivation_matrix(i).add_per_col(bias);
+            
             // Store results in the right order:
             // For input i, store filter j result at position (i*num_of_filters + j)
             for(int j = 0; j < num_of_filters; j++) {
                 preactivation(i*num_of_filters + j) = preactivation_matrix(i).get_row(j);
             }
-            //this should return vecs, such that output(0) = image(0) with filter(0) applied to it
-            // output(1) = image(0) with filter(1) applied to it
-            // output(2) = image(1) with filter(0) applied to it
-            // output(3) = image(1) with filter(1) applied to it
         }
         
-        // Store the input as the last step to preserve it for backpropagation
+        // Store the input for backpropagation
         input = in;
         
+        // Apply activation function
         output = act_func(preactivation, call);
         
         return output;
@@ -703,10 +713,10 @@ class pool_layer : public layer{
         int num_submatrices_y = (input_size_y - pool_size) / stride + 1;
         int total_submatrices = num_submatrices_x * num_submatrices_y;
         input_matrix = matricies<float>(num_inputs, pool_size*pool_size, total_submatrices);
-        std::cout << "Input matrix: \n";
-        std::cout << "input matrix size: " << input_matrix.size() << std::endl;
-        std::cout << "input matrix size_col: " << input_matrix.size_col() << std::endl;
-        std::cout << "input matrix size_row: " << input_matrix.size_row() << std::endl;
+        //std::cout << "Input matrix: \n";
+        //std::cout << "input matrix size: " << input_matrix.size() << std::endl;
+        //std::cout << "input matrix size_col: " << input_matrix.size_col() << std::endl;
+        //std::cout << "input matrix size_row: " << input_matrix.size_row() << std::endl;
         output = vecs<float>(num_inputs, total_submatrices);
         max_pool_weights = matricies<float>(num_inputs, total_submatrices, input_size_x * input_size_y);
     }
@@ -980,11 +990,11 @@ class NeuralNetwork{
                 
                 // Actual backpropagation
                 backpropagation(input, target, loss_func, learning_rate);
-                /*
-                if(i % 100 == 0){
-                    std::cout << "Sample " << i << " of " << num_samples << " Error: " << sample_error << std::endl;
+                
+                if(i+1 % 100 == 0){
+                    std::cout << "Sample " << i+1 << " of " << num_samples << " Error: " << sample_error << std::endl;
                 }
-                */
+                
             }
             
             // Calculate average error

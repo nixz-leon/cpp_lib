@@ -171,4 +171,12 @@ void get_data_single(std::string filename, vecs<T> &data, vecs<T> &labels, bool 
     }
     data = switch_major_minor(data);
 }
+
+template <typename T>
+void normalize_data(vecs<T> &data){
+    for(int i = 0; i < data.num_of_vecs(); i++){
+        data(i) = normalize_data(data(i));
+    }
+}
+
 #endif

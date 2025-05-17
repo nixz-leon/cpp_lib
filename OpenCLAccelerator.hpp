@@ -423,6 +423,18 @@ public:
         return gpu_threshold;
     }
     
+    // Set GPU threshold
+    static void setGPUThreshold(int threshold) {
+        if (!initialized) initialize();
+        gpu_threshold = threshold;
+    }
+    
+    // Set thread threshold
+    static void setThreadThreshold(int threshold) {
+        if (!cpu_capabilities_detected) detectCPUCapabilities();
+        thread_threshold = threshold;
+    }
+    
     // Check if we should use GPU
     static bool shouldUseGPU(int size) {
         if (!initialized) initialize();
